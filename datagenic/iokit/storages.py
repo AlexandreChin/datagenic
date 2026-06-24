@@ -30,7 +30,7 @@ class Storages:
             case "azure_blob":
                 from datagenic.iokit.cloud_providers import azure_blob
 
-                load_dotenv(dotenv_path="credentials")
+                load_dotenv()
                 self.connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
                 self.container_name = os.getenv("CONTAINER_NAME")
                 if not self.connection_string or not self.container_name:
@@ -45,7 +45,7 @@ class Storages:
             case "sftp":
                 from datagenic.iokit.cloud_providers import sftp
 
-                load_dotenv(dotenv_path="credentials")
+                load_dotenv()
                 # e.g., sftp://user:pass@host:22
                 self.connection_string = os.getenv("SFTP_CONNECTION_STRING")
                 # acts as the base working directory
@@ -58,7 +58,7 @@ class Storages:
             case "s3":
                 from datagenic.iokit.cloud_providers import aws_s3
 
-                load_dotenv(dotenv_path="credentials")
+                load_dotenv()
                 self.aws_access_key = os.getenv("AWS_ACCESS_KEY_ID")
                 self.aws_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
                 self.container_name = os.getenv("S3_BUCKET_NAME")
