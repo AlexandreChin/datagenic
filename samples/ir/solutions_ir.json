@@ -3,7 +3,7 @@
   "tables": [
     {
       "name": "riskfactors_ZipTable_solutions_dms",
-      "kind": "dimension",
+      "type": "referential",
       "keys": [
         "productType"
       ],
@@ -20,7 +20,7 @@
     },
     {
       "name": "fx_Dictionary_solutions_dms",
-      "kind": "dimension",
+      "type": "referential",
       "keys": [
         "fx_date",
         "srcCurrency",
@@ -52,7 +52,7 @@
     },
     {
       "name": "csa_Dictionary_solutions_dms",
-      "kind": "dimension",
+      "type": "referential",
       "keys": [
         "csaId"
       ],
@@ -81,7 +81,7 @@
     },
     {
       "name": "trade_FactTable_solutions_dms",
-      "kind": "fact",
+      "type": "fact",
       "keys": [
         "tradeDate",
         "mtfScenario"

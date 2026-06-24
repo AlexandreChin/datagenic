@@ -1,6 +1,6 @@
 """Configs scaffolds from the neutral IR; an adaptor maps any other JSON shape in.
 
-The IR (a flat ``{name, tables:[{kind,name,keys,columns:[{name,type}]}]}``) is the
+The IR (a flat ``{name, tables:[{type,name,keys,columns:[{name,type}]}]}``) is the
 *native* input — passed straight through with no adaptor. To scaffold from a different
 schema (e.g. a bespoke JSON, or an Opensee DMS) pass ``adaptor=fn`` where
 ``fn(source) -> IR``. The DMS→IR adaptor ships in ``opensee_core.dms_adaptor.dms_to_ir``
@@ -26,7 +26,7 @@ def _native_ir():
         "name": "shop",
         "tables": [
             {
-                "kind": "fact",
+                "type": "fact",
                 "name": "orders",
                 "keys": ["order_id"],
                 "columns": [
@@ -35,7 +35,7 @@ def _native_ir():
                 ],
             },
             {
-                "kind": "dimension",
+                "type": "referential",
                 "name": "products",
                 "keys": ["sku"],
                 "columns": [{"name": "sku", "type": "string"}],
@@ -50,7 +50,7 @@ def _alt_adaptor(source):
         "name": source["modelName"],
         "tables": [
             {
-                "kind": "dimension",
+                "type": "referential",
                 "name": e["id"],
                 "keys": e["key"],
                 "columns": [{"name": f["name"], "type": f["type"]} for f in e["fields"]],
@@ -151,7 +151,7 @@ def test_cli_generate_data_config_native_ir(tmp_path):
             "name": "m",
             "tables": [
                 {
-                    "kind": "fact",
+                    "type": "fact",
                     "name": "f",
                     "keys": ["id"],
                     "columns": [{"name": "id", "type": "int"}],

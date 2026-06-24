@@ -223,7 +223,7 @@ class Configs:
           "tables": [
             {
               "name": "trades",
-              "kind": "fact",                  # "fact" | "dimension"
+              "type": "fact",                  # "fact" or "referential" (optional, default "referential")
               "keys": ["trade_id"],             # unicity-key column names
               "columns": [{"name": "trade_id", "type": "int"}, …],
               "foreign_keys": [                 # optional, fact tables
@@ -256,6 +256,12 @@ class Configs:
                 or not isinstance(table.get("columns"), list)
             ):
                 raise ValueError(f"Configs IR tables[{i}] needs a 'name' and a 'columns' list.")
+            table_type = table.get("type", "referential")
+            if table_type not in ("fact", "referential"):
+                raise ValueError(
+                    f"Configs IR table '{table['name']}': type must be 'fact' or 'referential' "
+                    f"(got {table_type!r}); omit it to default to 'referential'."
+                )
             for col in table["columns"]:
                 if not (isinstance(col, dict) and "name" in col and "type" in col):
                     raise ValueError(
@@ -266,7 +272,7 @@ class Configs:
     def _ir_to_internal(ir):
         """Expand the flat IR into the structured shape the scaffolder reads: fact
         tables + composite dicts, with foreign_keys mapped to dict-composite joins so
-        FK enforcement is built. (All dimensions collapse to composite dicts.)"""
+        FK enforcement is built. (All referential tables collapse to composite dicts.)"""
         internal = {
             "name": ir["name"],
             "tables": {
@@ -282,7 +288,7 @@ class Configs:
                 "unicityKey": list(table.get("keys", [])),
                 "columns": [{"name": c["name"], "dataType": c["type"]} for c in table["columns"]],
             }
-            if table.get("kind") == "fact":
+            if table.get("type") == "fact":
                 internal["tables"]["fact"].append(entry)
                 for fk in table.get("foreign_keys", []):
                     refs = fk["references"]

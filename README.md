@@ -95,9 +95,9 @@ from datagenic import Configs, Generator
 source = {
     "name": "shop",
     "tables": [
-        {"kind": "fact", "name": "orders", "keys": ["order_id"],
+        {"type": "fact", "name": "orders", "keys": ["order_id"],
          "columns": [{"name": "order_id", "type": "int"}, {"name": "amount", "type": "float"}]},
-        {"kind": "dimension", "name": "products", "keys": ["sku"],
+        {"type": "referential", "name": "products", "keys": ["sku"],
          "columns": [{"name": "sku", "type": "string"}]},
     ],
 }
@@ -122,7 +122,7 @@ datagenic check-distributable config.json           # confirm splitting won't ch
 ## The IR, and scaffolding from any schema
 
 The **internal representation (IR)** is the native input — a flat
-`{name, tables:[{kind, name, keys, columns:[{name, type}]}]}`. To scaffold from a
+`{name, tables:[{type, name, keys, columns:[{name, type}]}]}`. To scaffold from a
 different schema, pass `adaptor=fn` where `fn(source) -> IR` — a small one-time mapper
 that turns your source format into the IR.
 

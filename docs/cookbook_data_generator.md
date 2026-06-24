@@ -49,9 +49,9 @@ from datagenic import Configs
 source = {
     "name": "shop",
     "tables": [
-        {"kind": "fact", "name": "orders", "keys": ["order_id"],
+        {"type": "fact", "name": "orders", "keys": ["order_id"],
          "columns": [{"name": "order_id", "type": "int"}, {"name": "amount", "type": "float"}]},
-        {"kind": "dimension", "name": "products", "keys": ["sku"],
+        {"type": "referential", "name": "products", "keys": ["sku"],
          "columns": [{"name": "sku", "type": "string"}]},
     ],
 }
@@ -66,7 +66,7 @@ The IR shape (an invalid shape fails fast with a clear error naming the problem)
   "tables": [
     {
       "name": "orders",
-      "kind": "fact",                  # "fact" | "dimension"
+      "type": "fact",                  # "fact" or "referential" (optional, default "referential")
       "keys": ["order_id"],            # unicity-key column names
       "columns": [{"name": "order_id", "type": "int"}, …],
       "foreign_keys": [                # optional, fact tables — drives FK enforcement
@@ -105,7 +105,7 @@ def my_adaptor(source: dict) -> dict:
         "tables": [
             {
                 "name": e["table"],
-                "kind": "fact" if e["role"] == "fact" else "dimension",
+                "type": "fact" if e["role"] == "fact" else "referential",
                 "keys": e.get("pk", []),
                 "columns": [{"name": n, "type": t} for n, t in e["fields"].items()],
                 "foreign_keys": [
@@ -296,7 +296,7 @@ Ensures FK columns in the fact table draw values exclusively from the referenced
 }
 ```
 
-`Configs.dump()` builds this block automatically from the IR's `foreign_keys` (each fact-table FK becomes a reference into the named dimension/reference table's column pool).
+`Configs.dump()` builds this block automatically from the IR's `foreign_keys` (each fact-table FK becomes a reference into the named referential table's column pool).
 
 ### Table entry
 

@@ -51,7 +51,7 @@ Everything flows through **scaffold → generate**:
 1. **Scaffold** (`datagenic/scaffolding.py`, `Configs`): IR → a full generation config JSON. `Configs` picks a default column generator per `(type, is_unicity_key, n_keys)` via the `Columns` class, wires foreign-key enforcement (`KeyEnforcer`) onto fact tables, and optionally attaches a no-op `TemplatePostProcessor` to every table. Output is dumped with `.dump(file_path=...)`.
 2. **Generate** (`datagenic/engine.py`, `Generator`): config → data files. `Generator(config).generate()` runs the nested loop **batch → date → table → columns → postprocessor**.
 
-The **IR** is the native input: a flat `{name, tables:[{kind, name, keys, columns:[{name, type}], foreign_keys}]}`. To scaffold from another schema, pass `adaptor=fn` where `fn(source) -> IR` — a small one-time mapper from your source format to the IR. Such adaptors live in the consuming/platform package, not here — this repo stays platform-free on purpose (see "Package boundary" below).
+The **IR** is the native input: a flat `{name, tables:[{type, name, keys, columns:[{name, type}], foreign_keys}]}`. To scaffold from another schema, pass `adaptor=fn` where `fn(source) -> IR` — a small one-time mapper from your source format to the IR. Such adaptors live in the consuming/platform package, not here — this repo stays platform-free on purpose (see "Package boundary" below).
 
 ## Module map (`datagenic/`)
 
