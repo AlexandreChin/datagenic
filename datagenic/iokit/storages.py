@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+import contextlib
 import io
 import os
 from pathlib import Path
@@ -84,6 +85,22 @@ class Storages:
         if self.storage_type == "local":
             return os.path.exists(file_path)
         return self._remote_client().exists(file_path)
+
+    def delete(self, file_path: str) -> None:
+        """Delete a single file/object, on local *or* any cloud backend.
+
+        Storage-agnostic counterpart to ``dump_dataframe`` — the platform reclaim
+        (``opensee_core``'s ChunkedRun) deletes generated chunks through this, so it
+        never has to know whether output landed on disk, Azure, S3, or SFTP. Missing
+        targets are a no-op, so reclaim stays idempotent across resumes/retries.
+        """
+        if self.storage_type == "local":
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(file_path)
+            return
+        # azure_blob / s3 / sftp providers all expose rm(path); deleting an absent
+        # object is harmless for our use (we only delete paths we just listed).
+        self._remote_client().rm(file_path)
 
     def read_parquet_metadata(self, file_path: str) -> dict:
         """Parquet key-value metadata as a ``dict[str, str]`` (decoded).

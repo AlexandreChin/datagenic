@@ -59,6 +59,51 @@ Supported output formats: `parquet`, `csv`, `avro`.
 
 ---
 
+## Deleting a file
+
+`delete` removes a single file/object on any backend (local `os.remove`, or the
+provider's delete for Azure/S3/SFTP). A missing target is a no-op, so it is safe to
+call repeatedly (idempotent).
+
+```python
+store.delete("samples/data_generator/output/orders/2024-01-01/orders-1.parquet")
+```
+
+---
+
+## The reclaim contract (locate + delete generated data)
+
+A downstream orchestrator that generates in chunks and frees space between them — e.g.
+the `opensee-core` `ChunkedRun` (generate → ingest → **reclaim**) — needs to find and
+delete exactly the files a batch produced, on local *or* cloud, **without** hard-coding
+datagenic's output layout. Three public seams make that possible:
+
+```python
+from datagenic import Generator
+from datagenic.iokit.storages import Storages
+
+gen = Generator("gen_config.json")
+
+# 1 — the resolved, read-only config (extends-merged); a fresh copy each call
+cfg = gen.resolved_config
+
+# 2 — the object paths written for one table + batch, across all dates.
+#     Enumerated through the storage layer, so it works for local AND cloud.
+paths = gen.batch_output_paths("orders", batch=1)
+
+# 3 — delete them through the same storage abstraction (local or cloud)
+store = Storages(cfg["default_parameters"]["storage_type"])
+for path in paths:
+    store.delete(path)
+```
+
+This is exactly how `ChunkedRun` reclaims a chunk after it has been ingested (it keeps
+`single_batch` / `single_date` reference tables and deletes only the bulk ones). Because
+deletion goes through `Storages`, the footprint is bounded identically whether output
+landed on disk or in a bucket.
+
+---
+
 ## Credentials reference
 
 To get started, copy the template and fill in the backend(s) you use:

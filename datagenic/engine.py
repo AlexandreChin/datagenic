@@ -154,6 +154,17 @@ class Generator:
         self._source_config = copy.deepcopy(loaded)
         self._build_working_config()
 
+    @property
+    def resolved_config(self) -> dict:
+        """The resolved, read-only source config (``extends`` already merged), as a
+        fresh deep copy.
+
+        Public accessor for downstream orchestration (e.g. ``opensee_core``'s
+        ChunkedRun) so it composes against a stable contract instead of reaching into
+        the private ``_source_config``.
+        """
+        return copy.deepcopy(self._source_config)
+
     def _resolve_extends(self, config, base_dir, _seen=None):
         """Resolve an optional top-level ``extends`` chain into one merged config.
 
@@ -352,6 +363,38 @@ class Generator:
             return None
         name = table["table_name"]
         return f"{p['output_folder_path']}/{p['tables_prefix']}{name}/{date}/{name}-{batch}.parquet"
+
+    def batch_output_paths(self, table_name, batch, storage=None):
+        """Object paths written for one ``table_name`` + ``batch``, across all dates.
+
+        Enumerated *through the storage layer* (``ls_dirs``/``ls_files``), so the same
+        call works for local and every cloud backend and the caller never reconstructs
+        datagenic's ``{prefix}{name}/{date}/{name}-{batch}.{ext}`` layout. This is the
+        contract the platform reclaim (``opensee_core``'s ChunkedRun) uses to locate a
+        chunk's files before deleting them via ``Storages.delete``. Returns ``[]`` when
+        nothing was written (e.g. the table dir does not exist yet).
+
+        ``storage`` may be supplied to reuse one client across many calls; otherwise a
+        ``Storages`` is built from this config's ``storage_type``.
+        """
+        p = self._source_config["default_parameters"]
+        prefix = p.get("tables_prefix", "")
+        ext = p.get("output_format", "parquet")
+        storage = storage or storages.Storages(p["storage_type"])
+        table_dir = f"{p['output_folder_path']}/{prefix}{table_name}"
+        target = f"{table_name}-{batch}.{ext}"
+        paths = []
+        try:
+            date_dirs = storage.ls_dirs(table_dir, full_path=True)
+        except Exception:
+            return paths  # table dir absent / unreadable → nothing to reclaim
+        for date_dir in date_dirs:
+            try:
+                files = storage.ls_files(date_dir, full_path=True)
+            except Exception:
+                continue
+            paths.extend(f for f in files if os.path.basename(f) == target)
+        return paths
 
     def _load_checkpoint(
         self, path, config_hash, force_regenerate, storage, table=None, end_date=None
