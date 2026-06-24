@@ -1,7 +1,5 @@
 # Cookbook — Data Generator
 
-A lightweight synthetic-data generator — zero-config to fully custom, laptop to cluster, no rewrite.
-
 ---
 
 ## Quickstart: scaffold a config and generate data
@@ -34,9 +32,8 @@ Configs(
 Generator(data_generator_config_file=config_path).generate()
 ```
 
-> Scaffolding from an **Opensee DMS** is done with the `dms_to_ir` adaptor, which
-> ships in the separate `opensee-core` package — see _scaffold from another schema_
-> below for the `adaptor=` seam.
+> Already have your tables described in another format? Map it to the IR with a small
+> `adaptor` function — see _scaffold from another schema_ below.
 
 ---
 
@@ -82,28 +79,57 @@ The IR shape (an invalid shape fails fast with a clear error naming the problem)
 ```
 
 **Scaffold from another schema — pass `adaptor=fn`**, where `fn(source) -> IR` maps
-your structure into the IR. The Opensee DMS adaptor ships in
-`opensee_core.dms_adaptor.dms_to_ir`:
+your structure into the IR. The adaptor is a plain function: take whatever shape your
+schema has and return the IR dict. For example, suppose your models are described as
+entities with a `role`, a primary key, and a `name: type` field map:
 
 ```python
 from datagenic import Configs
-from opensee_core.dms_adaptor import dms_to_ir
 
-Configs(
-    input="samples/dm/solutions_dms.json", adaptor=dms_to_ir
-).dump(file_path="config.json")
+# Your own schema (any shape you like — this is just an example)
+my_schema = {
+    "dataset": "shop",
+    "entities": [
+        {"table": "orders", "role": "fact", "pk": ["order_id"],
+         "fields": {"order_id": "int", "sku": "string", "amount": "float"},
+         "refs": {"sku": "products.sku"}},
+        {"table": "products", "role": "dimension", "pk": ["sku"],
+         "fields": {"sku": "string", "name": "string"}},
+    ],
+}
+
+def my_adaptor(source: dict) -> dict:
+    """Map a custom schema into datagenic's IR (`fn(source) -> IR`)."""
+    return {
+        "name": source["dataset"],
+        "tables": [
+            {
+                "name": e["table"],
+                "kind": "fact" if e["role"] == "fact" else "dimension",
+                "keys": e.get("pk", []),
+                "columns": [{"name": n, "type": t} for n, t in e["fields"].items()],
+                "foreign_keys": [
+                    {"column": col, "references": ref}
+                    for col, ref in e.get("refs", {}).items()
+                ],
+            }
+            for e in source["entities"]
+        ],
+    }
+
+Configs(input=my_schema, adaptor=my_adaptor).dump(file_path="config.json")
 ```
 
-Or from the CLI (`--adaptor module:function`):
+Or from the CLI (`--adaptor module:function`, pointing at your adaptor):
 
 ```bash
 # native IR — no adaptor
 uv run python -m datagenic.cli generate-data-config '{"name":"shop","tables":[...]}' \
   -o config.json
 
-# Opensee DMS — via the dms_to_ir adaptor
-uv run python -m datagenic.cli generate-data-config samples/dm/solutions_dms.json \
-  -o config.json --adaptor opensee_core.dms_adaptor:dms_to_ir
+# custom schema — via your own adaptor
+uv run python -m datagenic.cli generate-data-config my_schema.json \
+  -o config.json --adaptor mypkg.adaptors:my_adaptor
 ```
 
 ---
@@ -260,24 +286,23 @@ Ensures FK columns in the fact table draw values exclusively from the referenced
 "postprocessor_args": {
     "fk_enforcement": {
         "enabled": true,
-        "trade_FactTable_solutions_dms": {
-            "Date":        ["fx_Dictionary_solutions_dms.fx_date"],
-            "srcCurrency": ["fx_Dictionary_solutions_dms.srcCurrency"],
-            "csaId":       ["csa_Dictionary_solutions_dms.csaId"],
-            "productType": ["riskfactors_ZipTable_solutions_dms.productType"]
+        "trade_fact": {
+            "Date":        ["fx_dim.fx_date"],
+            "srcCurrency": ["fx_dim.srcCurrency"],
+            "csaId":       ["csa_dim.csaId"],
+            "productType": ["riskfactors_zip.productType"]
         }
     }
 }
 ```
 
-`Configs.dump()` builds this block automatically from the DMS join definitions (composite dict joins, denormalized dict joins, and external zip joins).
+`Configs.dump()` builds this block automatically from the IR's `foreign_keys` (each fact-table FK becomes a reference into the named dimension/reference table's column pool).
 
 ### Table entry
 
 ```json
 {
-    "table_name": "trade_FactTable_solutions_dms",
-    "table_type": "factTable",
+    "table_name": "trade_fact",
     "number_of_rows": 2500,
     "single_batch": false,
     "single_date": false,
@@ -289,7 +314,6 @@ Ensures FK columns in the fact table draw values exclusively from the referenced
 
 | Field            | Description                                                                       |
 | ---------------- | --------------------------------------------------------------------------------- |
-| `table_type`     | `factTable`, `nonVersionedTable`, `nonVersionedTableWithDate`, `hashedDictionary` |
 | `number_of_rows` | Total rows across all batches for one date                                        |
 | `single_date`    | If `true`, only generate for `start_date`                                         |
 | `single_batch`   | If `true`, only generate for the first batch                                      |
@@ -333,7 +357,7 @@ Private arguments injected automatically into every generator call:
 ## Custom column generator
 
 ```python
-# tests/postprocessors/my_generators.py
+# mypkg/my_generators.py  (any module importable on your PYTHONPATH)
 class MyGenerator:
     def call(self, prefix: str, _number_of_rows_per_batch: int, **kwargs):
         import numpy as np
@@ -349,7 +373,7 @@ Reference it in the config:
   "is_unicity_key": false,
   "column_generator": {
     "udf_name": "MyGenerator",
-    "udf_module": "tests.postprocessors.my_generators",
+    "udf_module": "mypkg.my_generators",
     "args": { "prefix": "item_" }
   }
 }
@@ -371,14 +395,13 @@ A post-processor replaces or augments the column-generated data for a table. Com
 ```json
 {
   "table_name": "FinancialInstruments",
-  "table_type": "nonVersionedTable",
   "number_of_rows": 0,
   "columns": [],
   "single_batch": true,
   "single_date": true,
   "dump_results": true,
   "post_processor": {
-    "udf_module": "tests.postprocessors.postprocessors",
+    "udf_module": "postprocessors_udfs.generic_udfs",
     "udf_name": "ImportFile",
     "udf_args": { "file_path": "tests/source/financial_instruments.csv" }
   }
@@ -390,7 +413,7 @@ Extra private arguments available inside post-processor `call()`:
 | Argument                    | Value                                                       |
 | --------------------------- | ----------------------------------------------------------- |
 | `_table`                    | The `DataFrame` generated so far for this table             |
-| `_tables`                   | Dict of previously generated tables (last date, last batch) |
+| `_input_tables`             | Dict of the upstream tables this post-processor declared in `udf_args._input_tables`, resolved to their data (current batch's slice) — exactly those, `{}` if none declared |
 | `_unicity_keys`             | List of unicity key column names for this table             |
 | `_date`                     | Current business date being generated                       |
 | `_previous_date`            | Previous business date (`_start_date` on the first date)    |
@@ -399,6 +422,8 @@ Extra private arguments available inside post-processor `call()`:
 | `_batch_number`             | Current batch number (1-indexed, offset applied)            |
 | `_number_of_batches`        | Total number of batches                                     |
 | `_number_of_rows_per_batch` | `ceil(number_of_rows / number_of_batches)` for this table   |
+| `_seed`                     | Deterministic per-unit seed (`sha256(seed \| table \| date \| batch)`) |
+| `_rng`                      | A seeded `numpy.random.Generator` (`default_rng(_seed)`) — **use this for any randomness**, never the global `numpy.random` |
 
 A post-processor class must expose a `call(**kwargs)` method. Optionally implement `recall(**kwargs)` to apply time-evolution logic on subsequent dates (same signature as `call`).
 
