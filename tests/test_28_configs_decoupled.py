@@ -72,3 +72,36 @@ def test_configs_rejects_bad_input():
 
     with pytest.raises(TypeError, match="must be a dict or a string"):
         Configs(input=12345)
+
+
+# --------------------------------------------------------------------------- #
+# dump() path handling (regression)
+# --------------------------------------------------------------------------- #
+_DUMP_IR = {
+    "name": "shop",
+    "tables": [
+        {
+            "type": "fact",
+            "name": "orders",
+            "keys": ["id"],
+            "columns": [{"name": "id", "type": "int"}],
+        }
+    ],
+}
+
+
+def test_dump_bare_filename_writes_file_not_junk_dir(tmp_path, monkeypatch):
+    """Regression: dump('x.json') with no directory must write x.json to the cwd, not
+    mkdir a truncated 'x.jso' directory (the old `file_path[:rfind('/')]` slice bug)."""
+    monkeypatch.chdir(tmp_path)
+    Configs(input=_DUMP_IR, output_format="parquet").dump(file_path="gen_config.json")
+
+    assert (tmp_path / "gen_config.json").is_file()
+    assert not (tmp_path / "gen_config.jso").exists()  # the bug created this junk dir
+
+
+def test_dump_creates_nested_parent_dirs(tmp_path):
+    """A path with directories that don't exist yet is created."""
+    out = tmp_path / "a" / "b" / "cfg.json"
+    Configs(input=_DUMP_IR, output_format="parquet").dump(file_path=str(out))
+    assert out.is_file()

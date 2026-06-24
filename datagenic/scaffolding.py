@@ -676,11 +676,11 @@ class Configs:
     def dump(
         self, file_path: str = "samples/data_generation_config/data_generation_config.json"
     ) -> None:
-        # create directory
-        Path(file_path[: file_path.rfind("/")]).mkdir(parents=True, exist_ok=True)
-
-        # clear file
-        open(file_path, "w").close()
+        # create the parent directory (Path.parent is "." for a bare filename, so a
+        # name with no directory writes to cwd instead of mkdir-ing a truncated junk
+        # dir — the old `file_path[:rfind('/')]` produced e.g. "my_config.jso").
+        parent = Path(file_path).parent
+        parent.mkdir(parents=True, exist_ok=True)
 
         with open(file_path, "w") as f:
             f.write(json.dumps(self.config_template, sort_keys=False, indent=4))
