@@ -1,0 +1,48 @@
+stages:
+  - lint
+  - test
+
+# datagenic is a standalone, dependency-light leaf (no opensee-core / platform
+# dependency), so CI just installs the locked toolchain and runs lint + tests.
+#
+# Image is 3.13 (not the 3.11 floor of requires-python) on purpose: the golden
+# baseline is keyed to the locked numpy 2.5.0, which requires Python >= 3.12. On
+# 3.11, uv.lock resolves numpy 2.4.6 instead and the byte-for-byte golden test
+# (tests/golden) can diverge. 3.12/3.13/3.14 all resolve the baseline toolchain.
+default:
+  image: python:3.13
+  before_script:
+    - pip install uv
+    - uv sync --frozen
+
+lint:
+  stage: lint
+  script:
+    - uv run ruff check .
+    - uv run ruff format --check .
+
+# Types are added incrementally; surface issues without blocking the pipeline yet.
+typecheck:
+  stage: lint
+  allow_failure: true
+  script:
+    - uv run mypy datagenic/
+
+# Credential-free subset. Tests that hit the network/cloud are marked
+# @pytest.mark.integration and excluded here; gate them in a separate job with
+# secrets if/when needed.
+# NOTE: the golden baseline (tests/golden/baseline_manifest.json) is keyed to the
+# locked library versions — `uv sync --frozen` keeps CI aligned with it. Bumping
+# numpy/polars/pyarrow in uv.lock may require re-running
+# `python tests/golden/capture_baseline.py`.
+test:
+  stage: test
+  script:
+    - uv run pytest -m "not integration"
+      --cov=datagenic --cov-report=term-missing --cov-report=xml -q
+  coverage: '/TOTAL.*\s(\d+%)$/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml

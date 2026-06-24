@@ -1,0 +1,193 @@
+{
+  "name": "solutions_dms",
+  "tables": [
+    {
+      "name": "riskfactors_ZipTable_solutions_dms",
+      "kind": "dimension",
+      "keys": [
+        "productType"
+      ],
+      "columns": [
+        {
+          "name": "productType",
+          "type": "string"
+        },
+        {
+          "name": "riskfactorsLabels",
+          "type": "array(string)"
+        }
+      ]
+    },
+    {
+      "name": "fx_Dictionary_solutions_dms",
+      "kind": "dimension",
+      "keys": [
+        "fx_date",
+        "srcCurrency",
+        "trgtCurrency",
+        "fx_type"
+      ],
+      "columns": [
+        {
+          "name": "fx_date",
+          "type": "date"
+        },
+        {
+          "name": "srcCurrency",
+          "type": "string"
+        },
+        {
+          "name": "trgtCurrency",
+          "type": "string"
+        },
+        {
+          "name": "fx_type",
+          "type": "string"
+        },
+        {
+          "name": "fx_rate",
+          "type": "float32"
+        }
+      ]
+    },
+    {
+      "name": "csa_Dictionary_solutions_dms",
+      "kind": "dimension",
+      "keys": [
+        "csaId"
+      ],
+      "columns": [
+        {
+          "name": "csaId",
+          "type": "string"
+        },
+        {
+          "name": "elligibleCollateral",
+          "type": "string"
+        },
+        {
+          "name": "frequency",
+          "type": "float32"
+        },
+        {
+          "name": "threshold",
+          "type": "float32"
+        },
+        {
+          "name": "mta",
+          "type": "float32"
+        }
+      ]
+    },
+    {
+      "name": "trade_FactTable_solutions_dms",
+      "kind": "fact",
+      "keys": [
+        "tradeDate",
+        "mtfScenario"
+      ],
+      "columns": [
+        {
+          "name": "Date",
+          "type": "date"
+        },
+        {
+          "name": "tradeDate",
+          "type": "date"
+        },
+        {
+          "name": "tradeId",
+          "type": "string"
+        },
+        {
+          "name": "book",
+          "type": "string"
+        },
+        {
+          "name": "counterparty",
+          "type": "string"
+        },
+        {
+          "name": "csaId",
+          "type": "string"
+        },
+        {
+          "name": "productType",
+          "type": "string"
+        },
+        {
+          "name": "mtfScenario",
+          "type": "string"
+        },
+        {
+          "name": "srcCurrency",
+          "type": "string"
+        },
+        {
+          "name": "notional",
+          "type": "float32"
+        },
+        {
+          "name": "mtm",
+          "type": "float32"
+        },
+        {
+          "name": "mtf",
+          "type": "array(float32)"
+        },
+        {
+          "name": "sensis",
+          "type": "array(float32)"
+        },
+        {
+          "name": "riskFactors",
+          "type": "array(float32)"
+        },
+        {
+          "name": "legalEntities",
+          "type": "array(string)"
+        },
+        {
+          "name": "legIds",
+          "type": "array(string)"
+        },
+        {
+          "name": "legCurrencies",
+          "type": "array(string)"
+        },
+        {
+          "name": "legTypes",
+          "type": "array(string)"
+        },
+        {
+          "name": "legNotionals",
+          "type": "array(float32)"
+        },
+        {
+          "name": "datePlots",
+          "type": "array(date)"
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "Date",
+          "references": "fx_Dictionary_solutions_dms.fx_date"
+        },
+        {
+          "column": "srcCurrency",
+          "references": "fx_Dictionary_solutions_dms.srcCurrency"
+        },
+        {
+          "column": "csaId",
+          "references": "csa_Dictionary_solutions_dms.csaId"
+        },
+        {
+          "column": "productType",
+          "references": [
+            "riskfactors_ZipTable_solutions_dms.productType"
+          ]
+        }
+      ]
+    }
+  ]
+}

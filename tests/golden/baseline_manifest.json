@@ -1,0 +1,28 @@
+{
+  "dms": {
+    "csa_Dictionary_solutions_dms/2024-01-01/csa_Dictionary_solutions_dms-1.parquet": "fde764cc40e29e5cd8d21560b788f530914edab6e77a0d28d91f29a81bfbc8af",
+    "csa_Dictionary_solutions_dms/2024-01-01/csa_Dictionary_solutions_dms-2.parquet": "7fbe25e7f5c0627d3275ea5353ecf848a0def87295fbbe19a192d9eb3c1c0579",
+    "csa_Dictionary_solutions_dms/2024-01-02/csa_Dictionary_solutions_dms-1.parquet": "053bc069c703d491f590c6b078498661d5fb1eb47d01af09e4e84daaca13ad9b",
+    "csa_Dictionary_solutions_dms/2024-01-02/csa_Dictionary_solutions_dms-2.parquet": "1df66dd963c13f034b13ab5ef9f672943985954317ea7ee75e99519b828ddb70",
+    "fx_Dictionary_solutions_dms/2024-01-01/fx_Dictionary_solutions_dms-1.parquet": "83da6d81f2b0cf7edcd8e900c39186103b620bbcebd26a6ac72508105527813b",
+    "fx_Dictionary_solutions_dms/2024-01-01/fx_Dictionary_solutions_dms-2.parquet": "491fc7982cae7a340817113aa9c9c5fea593c47486b78263b68c70502dbdaf47",
+    "fx_Dictionary_solutions_dms/2024-01-02/fx_Dictionary_solutions_dms-1.parquet": "a87d4b3a9ebfe3e1976f8f9a1b6259193ecea01293f655bded8ff423002aaee8",
+    "fx_Dictionary_solutions_dms/2024-01-02/fx_Dictionary_solutions_dms-2.parquet": "7e0f85f7040f3df6db560e0cd9ff57e80852d868e54b835835be925406768e12",
+    "riskfactors_ZipTable_solutions_dms/2024-01-01/riskfactors_ZipTable_solutions_dms-1.parquet": "2fc5029a45ea34bbb4e85f7542df24546b3d669c989b3a41726e539134feddd8",
+    "riskfactors_ZipTable_solutions_dms/2024-01-01/riskfactors_ZipTable_solutions_dms-2.parquet": "b3d35cfab0ce0ce2084a7e5d1c86e1e5d6f673fd21ab3fc942bcf892e935f94b",
+    "riskfactors_ZipTable_solutions_dms/2024-01-02/riskfactors_ZipTable_solutions_dms-1.parquet": "2fc5029a45ea34bbb4e85f7542df24546b3d669c989b3a41726e539134feddd8",
+    "riskfactors_ZipTable_solutions_dms/2024-01-02/riskfactors_ZipTable_solutions_dms-2.parquet": "b3d35cfab0ce0ce2084a7e5d1c86e1e5d6f673fd21ab3fc942bcf892e935f94b",
+    "trade_FactTable_solutions_dms/2024-01-01/trade_FactTable_solutions_dms-1.parquet": "125bc59f5dbfbac97b28cf3454c910cd24ee960ab42690cdc5f1dda9cec00fd0",
+    "trade_FactTable_solutions_dms/2024-01-01/trade_FactTable_solutions_dms-2.parquet": "e353d599eef0e484ff5b282709d0dd77a39863d77dedafe4409646afacc63b1e",
+    "trade_FactTable_solutions_dms/2024-01-02/trade_FactTable_solutions_dms-1.parquet": "16a16329104198ece38c317079ad8df559c74f9a52355251389a75754f08be85",
+    "trade_FactTable_solutions_dms/2024-01-02/trade_FactTable_solutions_dms-2.parquet": "1a571e8ebf314bc5e9ee94c5f4077ef510a3877f00830ae9b324e07b11821e3d"
+  },
+  "rng": {
+    "t_rng/2024-01-01/t_rng-1.parquet": "2723f8141023a7721c19c83e571843f1c19c007da7b9e2eea25f47e8557c7fa1",
+    "t_rng/2024-01-01/t_rng-2.parquet": "63c62688fea5f5fdd444ead8d9259c955e4f742aef8306620a16c98739a2c9a5",
+    "t_rng/2024-01-02/t_rng-1.parquet": "b387d391d51233e9cb063b3d25d3914d931ac07e5cde174e0e7d2e89bff32e45",
+    "t_rng/2024-01-02/t_rng-2.parquet": "bc2efbbd4ee36129a0823876b4cade7f6e2d2ee6f3856d6112576d24f433d5d2",
+    "t_rng/2024-01-03/t_rng-1.parquet": "aecdb18fb9a8e020bd01a29bf1cba6a74e1aa4738bc134483c4d153d6c17a205",
+    "t_rng/2024-01-03/t_rng-2.parquet": "10a2d6c4e4d2e32d48898eb4c36feb68efcbbe7f9bc57b5c998efc723f4539fa"
+  }
+}

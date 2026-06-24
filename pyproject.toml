@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "datagenic"
+version = "1.0.0"
+description = "datagenic — generic synthetic-data generation: data-model-driven config scaffolding, deterministic large-scale generation, and a unified storage layer (local + cloud)."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26.0",
+    "pandas>=2.0.0",
+    "polars>=1.6.0",
+    "pyarrow>=16.0.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+# Cloud storage backends (datagenic.iokit.cloud_providers) — imported lazily per
+# storage_type, so local generation needs none of these.
+cloud = [
+    "azure-storage-blob>=12.0.0",
+    "boto3>=1.36.0",
+    "paramiko>=3.0.0",
+]
+
+[project.scripts]
+datagenic = "datagenic.cli:main"
+
+[dependency-groups]
+dev = [
+    "datagenic[cloud]",
+    "pytest>=9.0.3",
+    "pytest-cov>=6.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.9.0",
+    "pre-commit>=4.6.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["datagenic*", "postprocessors_udfs*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["build", "dist", ".venv", "*.egg-info"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+    "E501",   # line length is shaped by the formatter, not enforced as a lint error
+    "SIM102", # collapsible-if: the generation-loop guards stay readable as nested ifs
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["datagenic", "postprocessors_udfs"]
+
+[tool.ruff.lint.per-file-ignores]
+# __init__ files re-export the public API; the "unused"/star imports are intentional
+"__init__.py" = ["F401", "F403"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+ignore_missing_imports = true
+warn_return_any = true
+warn_unused_ignores = true
+exclude = ["build/", "dist/", ".venv/", ".*\\.egg-info/"]
+
+[tool.coverage.run]
+source = ["datagenic"]
+omit = ["*/__pycache__/*", "tests/*"]

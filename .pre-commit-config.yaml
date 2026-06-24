@@ -1,0 +1,22 @@
+# Run locally with: uv run pre-commit install   (then hooks fire on every commit)
+# Check everything once: uv run pre-commit run --all-files
+repos:
+  # Keep this rev in sync with the `ruff` dev dependency / CI, or pre-commit and
+  # CI can disagree on formatting and lint (they use different ruff versions).
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.19
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  # NOTE: mypy is intentionally NOT a pre-commit hook. Types are added
+  # incrementally and CI runs mypy with `allow_failure: true` (non-blocking), so
+  # gating local commits on it would be stricter than CI. Run it manually with
+  # `uv run mypy datagenic/` when working on types.
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.6.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]

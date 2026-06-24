@@ -1,0 +1,86 @@
+{
+  "default_parameters": {
+    "output_format": "parquet",
+    "storage_type": "local",
+    "output_folder_path": "samples/data_generator/solutions_dms_fake_data",
+    "tables_prefix": "",
+    "start_date": "2024-01-01",
+    "end_date": "2024-01-02",
+    "number_of_batches": 4,
+    "offset_batches": 0,
+    "postprocessor_args": {},
+    "seed": 0
+  },
+  "tables": [
+    {
+      "table_name": "table1",
+      "number_of_rows": 100,
+      "post_processor": {
+        "udf_module": "postprocessors_udfs.generic_udfs",
+        "udf_name": "ImportFile",
+        "udf_args": {
+          "file_path": "tests/source/financial_instruments.csv"
+        }
+      },
+      "columns": [],
+      "single_batch": false,
+      "single_date": false,
+      "dump_results": false
+    },
+    {
+      "table_name": "table2",
+      "number_of_rows": 100,
+      "post_processor": {
+        "udf_module": "postprocessors_udfs.generic_udfs",
+        "udf_name": "ImportFile",
+        "udf_args": {
+          "file_path": "tests/source/financial_instruments.csv"
+        }
+      },
+      "columns": [],
+      "single_batch": false,
+      "single_date": false,
+      "dump_results": true
+    },
+    {
+      "table_name": "table3",
+      "number_of_rows": 100,
+      "post_processor": {
+        "udf_module": "postprocessors_udfs.generic_udfs",
+        "udf_name": "MergeDataframes",
+        "udf_args": {
+          "_input_tables": [
+            "table1",
+            "table2"
+          ],
+          "right_on": "InstrId",
+          "left_on": "InstrId"
+        }
+      },
+      "columns": [],
+      "single_batch": false,
+      "single_date": false,
+      "dump_results": false
+    },
+    {
+      "table_name": "table4",
+      "number_of_rows": 100,
+      "post_processor": {
+        "udf_module": "postprocessors_udfs.generic_udfs",
+        "udf_name": "MergeDataframes",
+        "udf_args": {
+          "_input_tables": [
+            "table3",
+            "table2"
+          ],
+          "right_on": "InstrId",
+          "left_on": "InstrId"
+        }
+      },
+      "columns": [],
+      "single_batch": false,
+      "single_date": false,
+      "dump_results": true
+    }
+  ]
+}

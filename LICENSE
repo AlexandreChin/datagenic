@@ -1,0 +1,13 @@
+TODO: choose and add the open-source license before publishing.
+
+This is a placeholder. No license has been selected for `datagenic` yet — until a
+real license replaces this file, all rights are reserved and the code is NOT licensed
+for redistribution or use by third parties.
+
+Pick one (and update `pyproject.toml` with a matching `license` field), e.g.:
+  - Apache-2.0  (common for permissive corporate open source; includes a patent grant)
+  - MIT         (simplest permissive)
+  - BSD-3-Clause
+
+Then replace this file's contents with the chosen license text and set the
+copyright holder (e.g. "Copyright (c) 2026 Opensee").
