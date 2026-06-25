@@ -14,7 +14,7 @@
 
 ## When to use datagenic (and when not)
 
-datagenic is built for **structure-driven, reproducible data at any scale** — it generates plausible data from a schema you describe, not realistic data learned from a real dataset. It shines when one or more of these matters: **multi-dimensional consistency** (within a table, across tables, and across time), byte-for-byte reproducibility, a single config that runs from a laptop to a cluster, no source data to learn from, fully self-hosted, and **arbitrarily custom generation logic** you can express in Python.
+datagenic generates **plausible, structure-driven data from a schema you describe** — not realistic data *learned* from a real dataset. Where it fits, and where another tool is the better call:
 
 | Main criterion | Best choice(s) |
 | --- | --- |
@@ -33,7 +33,7 @@ datagenic is built for **structure-driven, reproducible data at any scale** — 
 | Quick single-table mock data, minimal setup | Faker · Mimesis · Mockaroo |
 | Edge-case **test inputs** to probe code (not bulk datasets) | [Hypothesis](https://github.com/HypothesisWorks/hypothesis) |
 
-In short: reach for datagenic when you care about **multi-dimensional consistency (within/across tables and over time) + reproducibility + custom generation logic + a path to scale**; reach for a field-level faker when you just need a few throwaway rows, or for an ML/privacy tool when fidelity to real data is the point.
+In short: **datagenic** for reproducible, consistent, custom data at scale; a field-level faker for a few throwaway rows; an ML/privacy tool when fidelity to real data is the point.
 
 ## Workflow
 
