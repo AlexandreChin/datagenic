@@ -82,7 +82,7 @@ pip install datagenic            # core (local generation)
 pip install "datagenic[cloud]"   # + Azure Blob / S3 / SFTP storage backends
 ```
 
-Requires Python ≥ 3.11.
+Requires Python ≥ 3.12.
 
 ## Quickstart
 

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `datagenic` is a standalone Python package for **deterministic, distributable synthetic-data generation**. It takes a neutral description of tables (the *IR*), scaffolds a generation config, then executes that config to produce realistic, reproducible data. The defining invariant across the whole codebase: **the same seed + config always yields byte-identical output** — whether run sequentially, on N local cores, or sharded across a cluster. Most non-obvious design choices exist to protect that invariant.
 
-Requires Python ≥ 3.11.
+Requires Python ≥ 3.12.
 
 ## Commands
 

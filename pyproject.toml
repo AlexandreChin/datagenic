@@ -7,7 +7,7 @@ name = "datagenic"
 version = "1.0.0"
 description = "datagenic — generic synthetic-data generation: data-model-driven config scaffolding, deterministic large-scale generation, and a unified storage layer (local + cloud)."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "numpy>=1.26.0",
     "pandas>=2.0.0",
@@ -44,7 +44,7 @@ include = ["datagenic*", "postprocessors_udfs*"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 extend-exclude = ["build", "dist", ".venv", "*.egg-info"]
 
 [tool.ruff.lint]
@@ -65,8 +65,7 @@ known-first-party = ["datagenic", "postprocessors_udfs"]
 quote-style = "double"
 
 [tool.mypy]
-# 3.12+: the locked numpy (>=2.5, Python>=3.12) ships type-stub syntax (PEP 695
-# `type` statements) that mypy only parses when targeting 3.12 or newer.
+# matches requires-python (also needed so mypy parses the numpy >=3.12 type stubs)
 python_version = "3.12"
 strict = false
 ignore_missing_imports = true
