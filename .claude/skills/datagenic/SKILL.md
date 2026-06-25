@@ -43,6 +43,7 @@ datagenic generate-data-config samples/ir/solutions_ir.json -o config.json --out
 datagenic generate-data config.json                  # sequential
 datagenic generate-data config.json --parallel 8     # all local cores (byte-identical)
 datagenic generate-data config.json --shard 1 --of 8 # one worker of a distributed run
+datagenic generate-data config.json --tables orders  # a "job": orders + its upstream closure only
 datagenic check-distributable config.json            # prove sharding is byte-safe
 ```
 

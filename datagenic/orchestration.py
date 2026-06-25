@@ -111,7 +111,7 @@ def shard_batch_range(number_of_batches, shard, of):
     return [lo, hi]
 
 
-def run_shard(config, shard=1, of=1):
+def run_shard(config, shard=1, of=1, tables=None):
     """Generate one shard's batch slice of a run (master-free distribution).
 
     Shards are 1-based (``shard`` in ``1 … of``). ``of=1`` (the default) is today's
@@ -121,9 +121,12 @@ def run_shard(config, shard=1, of=1):
     mutated); seeds are unchanged, so the union of all shards equals a single-machine
     run byte-for-byte. Workers write disjoint ``table/date/batch`` files into the one
     shared output location.
+
+    ``tables`` runs only a *job* — the given root table(s) plus their transitive
+    upstream closure (orthogonal to sharding, which slices batches).
     """
     if of == 1 and shard == 1:
-        Generator(data_generator_config_file=config).generate()
+        Generator(data_generator_config_file=config).generate(tables=tables)
         return
 
     resolved = copy.deepcopy(Generator(config)._source_config)
@@ -141,16 +144,16 @@ def run_shard(config, shard=1, of=1):
     params["generation_summary_path"] = (
         f"{params['output_folder_path']}/{prefix}generation_summary.{suffix}.json"
     )
-    Generator(data_generator_config_file=resolved).generate()
+    Generator(data_generator_config_file=resolved).generate(tables=tables)
 
 
 def _generate_shard_worker(task):
     """Pool worker: generate one shard. Module-level so it is picklable."""
-    config, shard, of = task
-    run_shard(config, shard=shard, of=of)
+    config, shard, of, tables = task
+    run_shard(config, shard=shard, of=of, tables=tables)
 
 
-def run_parallel(config, workers):
+def run_parallel(config, workers, tables=None):
     """Generate a run across ``workers`` local processes (Step 8 / Part 5).
 
     The on-one-machine counterpart to ``run_shard``: the batch space is split into
@@ -167,7 +170,7 @@ def run_parallel(config, workers):
     if workers < 1:
         raise ValueError(f"workers must be >= 1, got {workers}")
     if workers == 1:
-        run_shard(config, shard=1, of=1)
+        run_shard(config, shard=1, of=1, tables=tables)
         return
 
     import multiprocessing as mp
@@ -181,7 +184,7 @@ def run_parallel(config, workers):
     methods = mp.get_all_start_methods()
     ctx = mp.get_context("forkserver" if "forkserver" in methods else "spawn")
 
-    tasks = [(config, shard, workers) for shard in range(1, workers + 1)]
+    tasks = [(config, shard, workers, tables) for shard in range(1, workers + 1)]
     with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
         # list() forces evaluation so a worker exception propagates to the caller.
         list(pool.map(_generate_shard_worker, tasks))

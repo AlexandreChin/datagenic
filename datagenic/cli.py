@@ -38,6 +38,12 @@ def main():
         help="Generate on N local processes (single-machine multicore). Output is "
         "byte-identical to a sequential run. Mutually exclusive with --shard/--of.",
     )
+    gen_parser.add_argument(
+        "--tables",
+        metavar="A,B,…",
+        help="Run only a job: the given root table(s) plus their full transitive "
+        "upstream dependency closure. Tables outside the closure are not generated.",
+    )
 
     check_parser = sub.add_parser(
         "check-distributable",
@@ -102,14 +108,16 @@ def main():
     if args.command == "generate-data":
         from datagenic import orchestration
 
+        tables = [t.strip() for t in args.tables.split(",") if t.strip()] if args.tables else None
+
         if args.parallel > 1:
             if args.of > 1:
                 parser.error(
                     "--parallel (single-machine multicore) is mutually exclusive with --of"
                 )
-            orchestration.run_parallel(args.config, args.parallel)
+            orchestration.run_parallel(args.config, args.parallel, tables=tables)
         else:
-            orchestration.run_shard(args.config, shard=args.shard, of=args.of)
+            orchestration.run_shard(args.config, shard=args.shard, of=args.of, tables=tables)
 
     elif args.command == "check-distributable":
         from datagenic import orchestration

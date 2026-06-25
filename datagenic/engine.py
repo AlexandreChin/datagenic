@@ -1023,7 +1023,53 @@ class Generator:
             where=f"{round((time.time() - start_dump), 2)}s",
         )
 
-    def generate(self, force_regenerate: bool = False, extend: bool = False, dry_run: bool = False):
+    def _select_job(self, roots) -> None:
+        """Restrict the working config to a *job*: the root table(s) plus their full
+        transitive upstream dependency closure.
+
+        Walks upstream from ``roots`` over every table-level dependency edge — each
+        post-processor's ``udf_args._input_tables``, the global
+        ``postprocessor_args._input_tables``, and dynamic ``number_of_rows.from_table``
+        — and keeps that closure in config order (already a valid topological order;
+        deps appear earlier). Tables outside the closure are dropped from the working
+        config, so they are never generated. Seeds are untouched and the config hash is
+        computed from the pristine full config, so the closure's output is
+        byte-identical to the same tables in a full run (and checkpoint-compatible).
+        """
+        cfg = self._data_generator_config_file_obj
+        by_name = {t["table_name"]: t for t in cfg["tables"]}
+        roots = [roots] if isinstance(roots, str) else list(roots)
+        unknown = [r for r in roots if r not in by_name]
+        if unknown:
+            raise ValueError(
+                f"generate(tables=...): unknown table(s) {unknown}; "
+                f"known tables are {sorted(by_name)}"
+            )
+        global_inputs = (
+            cfg["default_parameters"].get("postprocessor_args", {}).get("_input_tables", [])
+        )
+        needed: set = set()
+        stack = list(roots) + list(global_inputs)
+        while stack:
+            name = stack.pop()
+            if name in needed or name not in by_name:
+                continue
+            needed.add(name)
+            table = by_name[name]
+            if table.get("post_processor"):
+                stack += table["post_processor"].get("udf_args", {}).get("_input_tables", [])
+            nr = table.get("number_of_rows")
+            if isinstance(nr, dict) and "from_table" in nr:
+                stack.append(nr["from_table"])
+        cfg["tables"] = [t for t in cfg["tables"] if t["table_name"] in needed]
+
+    def generate(
+        self,
+        force_regenerate: bool = False,
+        extend: bool = False,
+        dry_run: bool = False,
+        tables: list | str | None = None,
+    ):
         """
         Generates fake data based on a config file.
 
@@ -1032,10 +1078,15 @@ class Generator:
             against accidentally treating a fresh run as an incremental extension).
         dry_run: validate the config and print the generation plan without
             producing any data or invoking any generator/postprocessor.
+        tables: run only a *job* — the given root table(s) plus their full transitive
+            upstream dependency closure. Tables outside the closure are not generated;
+            the closure's output is byte-identical to a full run.
         """
         # Start every run from a fresh, unmutated working config so repeated
         # generate() calls are independent and reproducible.
         self._build_working_config()
+        if tables is not None:
+            self._select_job(tables)
 
         start = time.time()
         tables_prefix = self._data_generator_config_file_obj["default_parameters"]["tables_prefix"]

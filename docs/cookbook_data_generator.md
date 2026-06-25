@@ -199,6 +199,29 @@ config; green = the union of shards is provably byte-identical to a single run):
 uv run python -m datagenic.cli check-distributable my_config.json
 ```
 
+### Generate a subset — a "job"
+
+To produce only part of the model, pass `--tables` (CLI) or `generate(tables=[...])`
+(API): the run generates the given **root table(s) plus their full transitive upstream
+closure** — every table they depend on via `udf_args._input_tables`, the global
+`postprocessor_args._input_tables`, and dynamic `number_of_rows.from_table` — and
+nothing else.
+
+```bash
+# produces `orders` AND its FK reference tables (e.g. products, fx_dim); unrelated tables are skipped
+uv run python -m datagenic.cli generate-data my_config.json --tables orders
+```
+
+```python
+Generator("my_config.json").generate(tables=["orders"])   # or a list of roots
+```
+
+The closure is self-contained (a fact table's FK pools come along, so references
+resolve), and seeds are untouched — so each table in the job is **byte-identical to the
+same table in a full run** (and checkpoint-compatible: tables already on disk from a
+prior run are reused). A job composes with `--parallel`/`--shard` (table-subset ×
+batch-subset are orthogonal).
+
 ### Uniqueness guarantees (and their limits) — read before trusting keys
 
 | Scope                                   | Unicity keys unique?                                                         |
