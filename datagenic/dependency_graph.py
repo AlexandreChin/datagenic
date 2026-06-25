@@ -112,9 +112,7 @@ class GraphDependencies:
                 # dynamic row count: this table's size derives from another table
                 number_of_rows = table.get("number_of_rows")
                 if isinstance(number_of_rows, dict) and "from_table" in number_of_rows:
-                    self.cross_edges.append(
-                        f"{self._nid(number_of_rows['from_table'])} --> {tbl}"
-                    )
+                    self.cross_edges.append(f"{self._nid(number_of_rows['from_table'])} --> {tbl}")
 
             self.groups.append(
                 {
@@ -187,7 +185,7 @@ class GraphDependencies:
 
         # no fill on the pipeline subgraphs; only the legend is filled
         for g in self.groups:
-            lines.append(f'style {g["id"]}_pipe fill:transparent')
+            lines.append(f"style {g['id']}_pipe fill:transparent")
         lines.append("style legend fill:#f1f5f9,stroke:#94a3b8")
 
         if mermaid_header:
