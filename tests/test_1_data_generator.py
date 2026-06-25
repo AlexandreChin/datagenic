@@ -63,7 +63,9 @@ def test_data_generator_graph_html(tmp_path):
     assert len(xs) == len(set(xs)), "chronological layout must give every node a unique x"
     # each table-type node is on its own row (unconnected nodes never share a y); a
     # feeder (generator/file) shares the row of the node it feeds.
-    table_ys = [e["position"]["y"] for e in positioned if e["data"]["type"] in ("table", "intermediate")]
+    table_ys = [
+        e["position"]["y"] for e in positioned if e["data"]["type"] in ("table", "intermediate")
+    ]
     assert len(table_ys) == len(set(table_ys)), "each table must be on its own row"
 
 
