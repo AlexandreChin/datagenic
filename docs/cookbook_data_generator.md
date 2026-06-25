@@ -78,6 +78,24 @@ The IR shape (an invalid shape fails fast with a clear error naming the problem)
 }
 ```
 
+### `type`: fact vs referential
+
+`type` tells the scaffolder how to treat each table — it changes two things in the
+generated config (and nothing else; `type` itself is not written into the config):
+
+- **`fact`** — the large, _referencing_ table(s) of your model (trades, orders, events…).
+  Scaffolded with `number_of_rows_in_fact_tables` rows (default **2500**), and its
+  `foreign_keys` are honored: a `KeyEnforcer` post-processor is wired on so every FK
+  column draws only from the referenced table's value pool (referential integrity).
+- **`referential`** (the default) — a smaller reference/lookup table that fact tables
+  point at (currencies, products, counterparties…). Scaffolded with
+  `number_of_rows_in_non_fact_tables` rows (default **100**). A `foreign_keys` block on
+  a referential table is ignored.
+
+So: mark a table `fact` to make it big and FK-enforced; leave it `referential` (or omit
+`type`) for a small pool that fact tables reference. Both row counts are configurable on
+`Configs(...)` (and overridable per table in the generated config).
+
 **Scaffold from another schema — pass `adaptor=fn`**, where `fn(source) -> IR` maps
 your structure into the IR. The adaptor is a plain function: take whatever shape your
 schema has and return the IR dict. For example, suppose your models are described as
@@ -441,3 +459,87 @@ GraphDependencies(
 ```
 
 The graph shows which files and tables feed which post-processors. Only tables that use a post-processor appear in the graph.
+
+For the `shop` model above (a `fact` table `orders` with an FK to the `referential`
+table `products`, plus a file-loaded table), `dump_file` renders a flowchart like this —
+each table's pipeline is grouped in its own box, and node type shows in both colour
+**and** shape — column generators are amber stadiums, post-processors pink hexagons,
+temp results grey, tables green, files blue (see the legend). When a table has **both**
+column generators and a post-processor, the column data is a *temp result* the
+post-processor consumes:
+
+```mermaid
+---
+title: Data Generator Workflow
+---
+%%{init: {'flowchart': {'curve': 'basis', 'nodeSpacing': 45, 'rankSpacing': 70}}}%%
+flowchart LR
+    classDef table fill:#bbf7d0,stroke:#16a34a,stroke-width:2.5px,color:#052e16
+    classDef generator fill:#fef3c7,stroke:#d97706,stroke-width:1.5px,color:#451a03
+    classDef postprocessor fill:#fce7f3,stroke:#db2777,stroke-width:1.5px,color:#500724
+    classDef intermediate_results fill:#f1f5f9,stroke:#64748b,stroke-width:1.5px,stroke-dasharray:4 3,color:#0f172a
+    classDef file fill:#dbeafe,stroke:#2563eb,stroke-width:1.5px,color:#172554
+
+    %% referential table: column generators feed it directly
+    subgraph products_pipe["products · referential"]
+        direction LR
+        pg(["⚙️ column generators"]):::generator --> products[("🗄️ products")]:::table
+    end
+
+    %% fact table: generators -> temp result -> KeyEnforcer -> table
+    subgraph orders_pipe["orders · fact"]
+        direction LR
+        og(["⚙️ column generators"]):::generator --> tmp[("🧪 temp result")]:::intermediate_results
+        tmp --> ke{{"🧩 KeyEnforcer<br/>datagenic.postprocessors"}}:::postprocessor --> orders[("🗄️ orders")]:::table
+    end
+
+    %% post-processor-only table loaded from a file
+    subgraph instruments_pipe["instruments · file-loaded"]
+        direction LR
+        csv["📄 financial_instruments.csv"]:::file --> imp{{"🧩 ImportFile<br/>generic_udfs"}}:::postprocessor --> instruments[("🗄️ instruments")]:::table
+    end
+
+    %% FK pool: products feeds the enforcer that fills orders' FK columns
+    products -->|FK pool| ke
+
+    subgraph legend["legend"]
+        direction LR
+        lf["📄 file"]:::file ~~~ lg(["⚙️ generator"]):::generator ~~~ lp{{"🧩 post-processor"}}:::postprocessor ~~~ lt[("🧪 temp result")]:::intermediate_results ~~~ ltab[("🗄️ table")]:::table
+    end
+
+    %% subgraphs: no fill on the pipelines, only the legend is filled
+    style products_pipe fill:transparent
+    style orders_pipe fill:transparent
+    style instruments_pipe fill:transparent
+    style legend fill:#f1f5f9,stroke:#94a3b8
+```
+
+Read the edges as _"feeds into"_: for `orders`, the column generators produce a temp
+result that `KeyEnforcer` post-processes — and `products ---> KeyEnforcer` means the
+`products` value pool is what the enforcer draws FK values from. For `instruments`,
+`financial_instruments.csv ---> ImportFile ---> instruments` loads the table straight
+from the file. (The real `dump_file` output uses this exact style — one left-to-right
+subgraph per table, the legend, and the colours/shapes above. Two cosmetic differences:
+its subgraph titles are just the table names, since `fact`/`referential` isn't carried
+in the config, and cross-table edges like the FK one are unlabeled.)
+
+### One unit at a time, replayed across dates and batches
+
+This DAG is the dependency structure for a **single `(date, batch)` unit** — the engine
+walks it once per unit, inside the nested loop **batch → date → table → columns →
+post-processor**. The *shape* never changes from unit to unit; what changes is the
+per-unit seeded RNG (`sha256(seed | table | date | batch)`), which is exactly what keeps
+each unit independent and reproducible.
+
+- **Across dates** — the first date invokes each generator/post-processor's `call()`;
+  later dates invoke `recall()`, which propagates state forward (e.g. a Brownian series
+  evolves from the previous date, and unicity keys stay stable). `single_date` tables are
+  produced only for `start_date`.
+- **Across batches** — every batch replays the same DAG with its own seed and a disjoint
+  key range, so batches are fully independent: byte-identical on re-run and safe to shard
+  across workers. `single_batch` tables (small reference pools) are generated once on the
+  first batch and reused by the rest.
+
+So the graph shows _what depends on what_ within a unit; the full dataset is that DAG
+executed once per `(date, batch)`, with `call()`/`recall()` selecting first-date vs
+time-propagated behaviour.
