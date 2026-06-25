@@ -379,6 +379,45 @@ Private arguments injected automatically into every generator call:
 
 ---
 
+## Fine-tuning a column
+
+Every column in the scaffolded config carries a `column_generator` block the scaffolder
+chose from the column's `(type, is_unicity_key, number_of_keys)`. A non-key float column,
+for example, scaffolds to:
+
+```json
+{
+  "col_name": "fx_rate",
+  "col_type": "float32",
+  "is_unicity_key": false,
+  "column_generator": {
+    "udf_name": "BrownianFloats",
+    "udf_module": "datagenic.generators",
+    "args": { "mu": 1000, "sigma": 100, "list_of_values": null, "probabilities": null },
+    "description": "generates random floats from a normal distribution, propagated across time"
+  }
+}
+```
+
+To fine-tune, edit that block in place — the keys under `args` are the generator's tunable
+parameters, pre-filled with their defaults:
+
+- **Tune the args** — e.g. `mu`/`sigma` for a float's distribution, `cardinality` for how
+  many distinct values the column draws from, `prefix` for string labels, `size_of_arrays`
+  for array columns.
+- **Pin exact values** — most generators accept `list_of_values` + `probabilities` to draw
+  from a fixed set with given weights, e.g.
+  `"list_of_values": ["EUR", "USD", "GBP"], "probabilities": [0.5, 0.3, 0.2]`.
+- **Swap the generator** — change `udf_name` to any built-in from the table above and set
+  its `args` (e.g. a random float → `RandomFloats`, a random string → `UniqueIncrementalStrings`).
+- **Use your own** — point `udf_module`/`udf_name` at a custom generator (next section).
+
+Editing `args`, the `seed`, or row counts changes the **config hash**, so a re-run
+regenerates the affected files instead of reusing stale checkpoints — you never silently
+mix old and new data. Relocating output or only extending the date range preserves reuse.
+
+---
+
 ## Custom column generator
 
 ```python
@@ -452,6 +491,76 @@ Extra private arguments available inside post-processor `call()`:
 
 A post-processor class must expose a `call(**kwargs)` method. Optionally implement `recall(**kwargs)` to apply time-evolution logic on subsequent dates (same signature as `call`).
 
+### Using the technical arguments
+
+The framework invokes your post-processor once per `(table, date, batch)` unit and injects
+the arguments above as keyword args. Name the ones you use and accept `**kwargs` for the
+rest, so new framework args never break your code:
+
+- **`call` vs `recall`** — `call(...)` runs on the **first** date; if you also define
+  `recall(...)` (same signature), it runs on **every later** date. Use the pair for
+  time-evolution: read the previous frame and `_previous_date` and roll values forward, so a
+  series drifts day to day instead of being redrawn from scratch.
+- **`_table` / `_input_tables`** — your own generated rows, and the upstream tables you
+  declared in `udf_args._input_tables` (resolved to the *current batch's* slice). Join or
+  sample against `_input_tables` to enforce cross-table relationships.
+- **dates** — `_date`, `_previous_date`, `_start_date`, `_end_date` give the time context
+  (e.g. only introduce new entities on `_start_date`, carry them forward otherwise).
+- **`_batch_number` / `_number_of_batches`** — which shard you're in and how many there are.
+  Fine for batch-aware sizing; never for state that must persist across batches (see below).
+- **`_number_of_rows_per_batch`** — size any rows you fabricate to match the batch.
+- **`_seed` / `_rng`** — a deterministic per-unit seed and a `numpy.random.Generator` seeded
+  from it. Draw **all** randomness from `_rng`.
+
+```python
+import polars as pl  # _table is a Polars DataFrame (pandas is also accepted)
+
+class DriftPrices:
+    """Seed a price per row, then nudge it a little each day (reproducibly)."""
+
+    def call(self, _table, _rng, _number_of_rows_per_batch, **kwargs):
+        return _table.with_columns(price=pl.Series(_rng.normal(100, 5, _number_of_rows_per_batch)))
+
+    def recall(self, _table, _rng, **kwargs):
+        prev = _table["price"].to_numpy()
+        return _table.with_columns(price=pl.Series(prev * (1 + _rng.normal(0, 0.01, len(prev)))))
+```
+
+Declare required config args with a `REQUIRED_ARGS = ["..."]` class attribute — `validate()`
+then rejects a config that omits them, before any data is produced.
+
+### Batch isolation & distributability
+
+datagenic stays byte-identical across sequential, `--parallel`, and `--shard` runs only if
+each `(table, date, batch)` unit is independent. For a post-processor that means:
+
+1. **Randomness only from `_rng`.** Never `numpy.random.*` global state, the `random`
+   module, `uuid`, or `time` — those vary per worker and destroy reproducibility.
+2. **No cross-batch state.** Don't accumulate in module globals across calls, and don't read
+   other batches' output files from disk. Each call depends only on its injected inputs.
+3. **Reading `_input_tables` is fine.** The framework injects only the *current* batch's
+   slice, so a join against a declared input table is batch-local and shardable.
+
+Declare what the post-processor depends on with an `INPUT_SCOPE` class attribute, so the
+distribution gate can reason about it:
+
+| `INPUT_SCOPE`       | Meaning                                                                            | Shardable? |
+| ------------------- | ---------------------------------------------------------------------------------- | ---------- |
+| `"batch"` (default) | depends only on its own batch's data                                               | ✅          |
+| `"reference"`       | also reads small reference tables every worker regenerates identically             | ✅          |
+| `"global"`          | depends on the whole table or cross-batch state                                    | ❌ — `validate(distributed=True)` rejects it for a sharded table |
+
+If a table genuinely needs whole-table data, the right tool is usually a `single_batch`
+reference table (generated once and broadcast), not `INPUT_SCOPE="global"`. Prove a config
+is safe to distribute before spending cluster time:
+
+```bash
+datagenic check-distributable config.json
+```
+
+It runs the static `INPUT_SCOPE` gate, a determinism probe (regenerate under a perturbed
+global RNG — output must be identical), and a sample full-run-vs-2-shards byte-equality check.
+
 ---
 
 ## Generating the workflow graph
@@ -459,13 +568,29 @@ A post-processor class must expose a `call(**kwargs)` method. Optionally impleme
 ```python
 from datagenic import GraphDependencies
 
-GraphDependencies(
+graph = GraphDependencies(
     "samples/data_generation_config/data_generator_config_post_processor.json"
-).dump_file(folder_path="samples/graphs", mermaid_header=False)
-# Output: samples/graphs/data_generator_dependencies.md
+)
+graph.dump_file(folder_path="samples/graphs", mermaid_header=False)
+# Output: samples/graphs/data_generator_dependencies.md  (static mermaid)
+
+graph.dump_html(folder_path="samples/graphs")
+# Output: samples/graphs/data_generator_dependencies.html (interactive)
 ```
 
-The graph shows which files and tables feed which post-processors. Only tables that use a post-processor appear in the graph.
+`dump_file` writes the **static mermaid** diagram shown above (great for embedding in
+docs/READMEs). `dump_html` writes an **interactive viewer** (Cytoscape.js) for exploring
+larger graphs — open it in a browser. It has a toolbar to:
+
+- **toggle layout** between **Chronological** (topological order — every node gets its
+  own column, so nothing shares a vertical line and reading left-to-right walks the
+  dependency order) and **Compact** (dagre layered, parallel branches packed);
+- **filter** by node type, **search** nodes, **fit** to screen, and **click a node** to
+  highlight its upstream/downstream dependencies.
+
+It loads Cytoscape.js from a CDN, so opening the file needs internet access.
+
+Both show which files and tables feed which post-processors; only tables that use a post-processor (or column generators) appear in the graph.
 
 For the `shop` model above (a `fact` table `orders` with an FK to the `referential`
 table `products`, plus a file-loaded table), `dump_file` renders a flowchart like this —
