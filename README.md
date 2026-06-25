@@ -114,6 +114,7 @@ datagenic generate-data-config samples/ir/solutions_ir.json -o config.json --out
 datagenic generate-data config.json                 # sequential
 datagenic generate-data config.json --parallel 8    # all local cores
 datagenic generate-data config.json --shard 1 --of 8  # one worker of a distributed run
+datagenic generate-data config.json --tables orders  # a "job": only this table + its upstream closure
 datagenic check-distributable config.json           # confirm splitting won't change the data
 ```
 
@@ -152,6 +153,11 @@ See [`docs/cookbook_data_generator.md`](docs/cookbook_data_generator.md) → _Lo
 uv sync          # or: pip install -e ".[cloud]" and the dev group
 pytest tests/
 ```
+
+**Working in this repo with Claude Code?** It ships a `datagenic` skill
+([`.claude/skills/datagenic/`](.claude/skills/datagenic/)) that Claude loads for
+guidance on the scaffold→generate pipeline, the IR, config authoring & fine-tuning,
+post-processors (technical args, batch isolation), distribution, and testing.
 
 ## License
 

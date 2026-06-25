@@ -8,6 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Requires Python ≥ 3.12.
 
+> **Skill available.** A `datagenic` skill lives in `.claude/skills/datagenic/` (SKILL.md + references on architecture, config/fine-tuning, post-processors & batch isolation, testing, pitfalls). Use it for deeper task-specific guidance.
+
 ## Commands
 
 ```bash
@@ -31,6 +33,7 @@ datagenic generate-data-config samples/ir/solutions_ir.json -o config.json --out
 datagenic generate-data config.json                  # sequential
 datagenic generate-data config.json --parallel 8     # all local cores (byte-identical to sequential)
 datagenic generate-data config.json --shard 1 --of 8 # one worker of a distributed run
+datagenic generate-data config.json --tables orders  # a "job": only this table + its upstream closure
 datagenic check-distributable config.json            # verify sharding is byte-safe
 ```
 
