@@ -337,6 +337,13 @@ Ensures FK columns in the fact table draw values exclusively from the referenced
 | `single_batch`   | If `true`, only generate for the first batch                                      |
 | `dump_results`   | If `false`, keep in memory only (useful for intermediate tables)                  |
 
+> **Memory model.** The engine keeps one frame per table in memory (the current
+> `(date, batch)` unit), overwritten each unit — so peak memory is bounded by
+> _number of tables × rows-per-unit_, not by the number of dates/batches. `dump_results:
+> false` saves **disk I/O, not memory**: an intermediate table stays resident for the
+> whole run (it may be read by any later table's post-processor on any date), and frames
+> are reclaimed only when overwritten, not evicted once a downstream consumer is done.
+
 ---
 
 ## Built-in column generators (`datagenic.generators`)
