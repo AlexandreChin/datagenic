@@ -11,6 +11,7 @@ from typing import Any
 
 import datagenic.iokit.func as func
 from datagenic import generators
+from datagenic.semantics import SEMANTIC_GENERATORS, build_generator, resolve_inferrer
 
 
 class Columns:
@@ -322,6 +323,8 @@ class Configs:
         enforce_fk: bool = True,
         template_postprocessors: bool = False,
         adaptor: Callable[[dict], dict] | None = None,
+        semantic_inferrer=None,
+        samples=None,
     ):
         # Load the source (dict, JSON path, or a plain string → empty IR), then run
         # the optional ``adaptor`` to map it into the IR. The IR is the native input;
@@ -342,6 +345,15 @@ class Configs:
         # expand the IR into the structured shape the scaffolder reads
         self._internal_model = self._ir_to_internal(self._ir)
         self._module_name = self._internal_model["name"]
+
+        # Semantic inference (scaffold-time only): map each column to a domain
+        # generator automatically, so the user need not hand-tag the IR. The
+        # resulting config is fully hand-editable; see _inferred annotations.
+        # ``samples`` (optional) lets a value-based inferrer read real values.
+        self._inferrer = resolve_inferrer(semantic_inferrer)
+        self._sample_data = self._normalize_samples(samples)
+        self._semantics: dict = {}
+        self._compute_semantics()
 
         self.enforce_fk = enforce_fk
         self.template_postprocessors = template_postprocessors
@@ -421,8 +433,10 @@ class Configs:
                     temp_generator.default_generator_description
                 )
 
+                self._apply_semantic(temp_col, table["name"])
                 temp_table["columns"].append(temp_col)
 
+            self._order_for_coherence(temp_table["columns"])
             self.config_template["tables"].append(temp_table)
 
         # composite dictionaries
@@ -468,8 +482,10 @@ class Configs:
                     temp_generator.default_generator_description
                 )
 
+                self._apply_semantic(temp_col, table["name"])
                 temp_table["columns"].append(temp_col)
 
+            self._order_for_coherence(temp_table["columns"])
             self.config_template["tables"].append(temp_table)
 
         # hashed dictionaries
@@ -514,8 +530,10 @@ class Configs:
                     temp_generator.default_generator_description
                 )
 
+                self._apply_semantic(temp_col, table["name"])
                 temp_table["columns"].append(temp_col)
 
+            self._order_for_coherence(temp_table["columns"])
             self.config_template["tables"].append(temp_table)
 
         # facttables
@@ -569,6 +587,7 @@ class Configs:
                     temp_generator.default_generator_description
                 )
 
+                self._apply_semantic(temp_col, table["name"])
                 temp_table["columns"].append(temp_col)
 
             # wire a KeyEnforcer postprocessor so fact-table FK columns draw from
@@ -582,6 +601,7 @@ class Configs:
                         "udf_args": {"_input_tables": input_tables, "rules": rules},
                     }
 
+            self._order_for_coherence(temp_table["columns"])
             self.config_template["tables"].append(temp_table)
 
         if self.template_postprocessors:
@@ -602,6 +622,127 @@ class Configs:
                     "udf_name": "TemplatePostProcessor",
                     "udf_args": {},
                 }
+
+    def _normalize_samples(self, samples) -> dict:
+        """Normalise the optional ``samples`` input to ``{table: {col: [values]}}``
+        for the inferrer. ``samples`` may be a dict (``table -> frame | path``) or
+        a directory string (matched to ``<table>.parquet`` / ``<table>.csv`` per
+        IR table). Frames are read frame-agnostically; values are capped per column.
+        """
+        if not samples:
+            return {}
+        sources = self._resolve_sample_sources(samples)
+        return {
+            tname: self._frame_to_coldict(self._read_frame(src) if isinstance(src, str) else src)
+            for tname, src in sources.items()
+        }
+
+    def _resolve_sample_sources(self, samples) -> dict:
+        if isinstance(samples, dict):
+            return samples
+        # a directory: match <table>.parquet / <table>.csv for each IR table
+        import os
+
+        out: dict = {}
+        for table in self._ir["tables"]:
+            for ext in ("parquet", "csv"):
+                path = os.path.join(samples, f"{table['name']}.{ext}")
+                if os.path.exists(path):
+                    out[table["name"]] = path
+                    break
+        return out
+
+    @staticmethod
+    def _read_frame(path: str):
+        import polars as pl
+
+        if path.endswith(".parquet"):
+            return pl.read_parquet(path)
+        if path.endswith(".csv"):
+            return pl.read_csv(path)
+        raise ValueError(f"unsupported sample file '{path}' (expected .parquet or .csv)")
+
+    @staticmethod
+    def _frame_to_coldict(frame, cap: int = 2000) -> dict:
+        """Frame-agnostic {col: [values]} (polars or pandas), capped to ``cap`` rows."""
+        columns = getattr(frame, "columns", None)
+        if columns is None:
+            return {}
+        out: dict = {}
+        for col in columns:
+            series = frame[col]
+            to_list = getattr(series, "to_list", None) or getattr(series, "tolist", None)
+            values = to_list() if to_list is not None else list(series)
+            out[col] = values[:cap]
+        return out
+
+    def _compute_semantics(self) -> None:
+        """Infer (or read explicit) per-column semantics keyed by (table, column).
+
+        Runs the configured inferrer over each table's columns; an explicit IR
+        ``semantic`` on a column overrides inference (confidence 1.0). Only
+        columns whose semantic maps to a known generator are kept. No-op when no
+        inferrer is set and no column carries an explicit ``semantic``.
+        """
+        has_explicit = any(c.get("semantic") for t in self._ir["tables"] for c in t["columns"])
+        if self._inferrer is None and not has_explicit:
+            return
+        for table in self._ir["tables"]:
+            tname = table["name"]
+            cols = [{"name": c["name"], "type": c.get("type")} for c in table["columns"]]
+            inferred = (
+                self._inferrer(tname, cols, samples=self._sample_data.get(tname))
+                if self._inferrer
+                else {}
+            )
+            for col in table["columns"]:
+                rec = inferred.get(col["name"])
+                if col.get("semantic"):  # explicit IR hint wins over inference
+                    rec = {
+                        "semantic": col["semantic"],
+                        "confidence": 1.0,
+                        "parent": col.get("parent"),
+                        "alternatives": [],
+                        "by": "explicit",
+                    }
+                if rec and rec["semantic"] in SEMANTIC_GENERATORS:
+                    self._semantics[(tname, col["name"])] = rec
+
+    def _apply_semantic(self, temp_col: dict, table_name: str) -> None:
+        """Override a column's generator with the one inferred for its semantic,
+        recording the inference under ``_inferred`` for manual review/fine-tuning.
+        ``_inferred`` sits beside ``column_generator`` and is ignored by the engine.
+        """
+        rec = self._semantics.get((table_name, temp_col["col_name"]))
+        if not rec:
+            return
+        cg = build_generator(rec["semantic"], rec.get("parent"))
+        cg["description"] = (
+            f"inferred semantic '{rec['semantic']}' "
+            f"(confidence {rec['confidence']:.2f}, by {rec['by']})"
+        )
+        temp_col["column_generator"] = cg
+        temp_col["_inferred"] = {
+            "semantic": rec["semantic"],
+            "confidence": rec["confidence"],
+            "parent": rec.get("parent"),
+            "alternatives": rec.get("alternatives", []),
+            "by": rec["by"],
+        }
+
+    @staticmethod
+    def _order_for_coherence(columns: list[dict]) -> None:
+        """Stably reorder so any column whose inferred parent is in the same table
+        comes after that parent: the engine builds columns top-to-bottom and a
+        hierarchy generator reads only the columns built before it. No-op when no
+        column has an ``_inferred`` parent (stable sort with equal keys)."""
+        names = {c["col_name"] for c in columns}
+
+        def _depth(col: dict) -> int:
+            parent = (col.get("_inferred") or {}).get("parent")
+            return 1 if parent and parent in names else 0
+
+        columns.sort(key=_depth)
 
     def _fk_rules(self, fact_table_name: str):
         """Translate the fk_enforcement map for a fact table into KeyEnforcer rules.

@@ -152,6 +152,98 @@ uv run python -m datagenic.cli generate-data-config my_schema.json \
 
 ---
 
+## Domain-aware scaffolding: financial-markets generators + automatic inference
+
+By default a `string` column scaffolds to `prefix_N`-style values. For a recognised
+**domain** you can get realistic, internally-coherent values instead — datagenic ships
+a financial-markets generator family and an inference layer that wires them
+automatically, **without hand-tagging the IR**.
+
+### The finance generators (`datagenic.generators_finance`)
+
+- **Coherent taxonomy** — `FinancialAssetClass` → `FinancialInstrumentType` →
+  `FinancialRiskFactorGroup`. The two child generators read the partial row (the
+  columns already built this unit) and sample only values valid for that row's asset
+  class, so `(asset_class, instrument_type)` pairs are always taxonomy-valid (Rates → IR
+  Swap, Credit → CDS, …). **Coherence requires the parent column to be generated first**
+  — list `asset_class` before its dependents (the scaffolder reorders inferred ones for
+  you).
+- **Market dimensions** — `Currency` (ISO 4217), `CurrencyPair`, `Tenor`, `CreditRating`
+  (`scale="SP"|"Moody"`), `GICSSector`.
+- **Identifiers** — `ISIN`/`CUSIP`/`SEDOL` with valid check digits (unique per batch when
+  used as a key), plus composed `InstrumentName`/`RiskFactorName` (e.g. `"EUR IR Swap 5Y"`).
+- **Org** — `Counterparty`, `TradingBook`, `Desk`.
+
+These are ordinary generators referenced by string in the config, so you can also wire
+one by hand (`"udf_module": "datagenic.generators_finance", "udf_name": "Currency"`).
+
+### Let the scaffolder detect them
+
+Pass `semantic_inferrer=` to `Configs` (or `--infer-semantics` on the CLI). Three
+strategies:
+
+| Strategy | Basis | Needs |
+|---|---|---|
+| `heuristic` | column-name patterns (`ccy`→currency, `isin`→isin, `asset_class`→asset_class, `tenor`→tenor, …) | nothing |
+| `values` | real sample values (ISO-4217 membership, ISIN/CUSIP/SEDOL checksum, taxonomy vocab); falls back to names when no sample | `samples=` |
+| `agent` | an LLM (Claude) for ambiguous columns | `pip install 'datagenic[agent]'` + `ANTHROPIC_API_KEY` |
+
+```python
+from datagenic import Configs
+
+ir = {
+    "name": "market_risk",
+    "tables": [{
+        "type": "fact", "name": "trades", "keys": ["trade_id"],
+        "columns": [
+            {"name": "trade_id", "type": "int"},
+            {"name": "asset_class", "type": "string"},
+            {"name": "instrument_type", "type": "string"},
+            {"name": "ccy", "type": "string"},
+            {"name": "tenor", "type": "string"},
+            {"name": "isin", "type": "string"},
+        ],
+    }],
+}
+Configs(input=ir, semantic_inferrer="heuristic").dump(file_path="config.json")
+```
+
+```bash
+# heuristic (names only) — dependency-free
+datagenic generate-data-config ir.json -o config.json --infer-semantics heuristic
+
+# value-based — point at a directory of <table>.parquet / <table>.csv samples
+datagenic generate-data-config ir.json -o config.json --infer-semantics values --samples ./samples
+
+# LLM — opt-in
+datagenic generate-data-config ir.json -o config.json --infer-semantics agent
+```
+
+Inference runs **at scaffold time only** — it writes a normal, frozen config, so
+generation stays byte-identical regardless of how the config was authored. Each
+auto-selected column carries an `_inferred` block (semantic, confidence, source); the
+engine ignores it.
+
+### Review and fine-tune
+
+```bash
+datagenic review-config config.json   # lists inferred columns, lowest confidence first
+```
+
+Then hand-edit `config.json` — swap a wrong `udf_name`, set `list_of_values`/
+`probabilities`, or restrict the domain via `cardinality` (a finance categorical honors
+`cardinality` as a cap; it can't exceed its vocabulary). An explicit `semantic` on an IR
+column overrides inference.
+
+> **Finance categoricals as unicity keys.** Each declares its true distinct count via
+> `cardinality()`, so the engine budgets the *other* keys correctly (no row-count
+> collapse). But a small domain can't be a high-cardinality key on its own — pair it with
+> an id/incremental key (e.g. `keys: ["trade_id", "asset_class"]`). If the keys are
+> mathematically too small for the requested rows, generation warns with the achievable
+> ceiling instead of silently dropping rows.
+
+---
+
 ## Scaling up: one config, generate anywhere
 
 Write **one config**, then scale by adding a flag. Every form below produces

@@ -791,12 +791,19 @@ class Generator:
         for column in table["columns"]:
             if column["is_unicity_key"]:
                 unicity_keys.append(column["col_name"])
-                if "datetime" in column["col_type"]:
-                    timestamp_cardinality = column["generator_obj"].cardinality(
+                if hasattr(column["generator_obj"], "cardinality"):
+                    # The generator declares how many distinct values it actually
+                    # produces (timestamp ranges, fixed-vocabulary categoricals, ...).
+                    # Treat it as a fixed dimension: record the count so the generator
+                    # caps to it, divide the budget, and free the slot — so the other
+                    # keys fill the remaining budget instead of this column being
+                    # over-allocated distinct values it can never deliver.
+                    declared_cardinality = column["generator_obj"].cardinality(
                         **column["column_generator"]["args"]
                     )
+                    column["column_generator"]["args"]["cardinality"] = declared_cardinality
                     remaining_cardinality_budget = max(
-                        1, round(remaining_cardinality_budget / timestamp_cardinality)
+                        1, round(remaining_cardinality_budget / declared_cardinality)
                     )
                     free_unicity_key_count -= 1
                 elif column["col_type"] == "date" and column["col_name"] == "Date":
@@ -833,6 +840,28 @@ class Generator:
             ):
                 column["column_generator"]["args"]["cardinality"] = max(
                     1, round(pow(remaining_cardinality_budget, 1 / free_unicity_key_count))
+                )
+
+        # No silent caps: when every unicity key has a fixed (capped) cardinality,
+        # their product is the most distinct key tuples the table can ever hold. If
+        # that is below the requested per-batch rows, the unique() dedup below will
+        # cap the output — surface the achievable ceiling instead of collapsing
+        # silently. (Skipped when any key is free, e.g. an id/identifier, since those
+        # scale to the row count and the product is not a real ceiling.)
+        if unicity_keys and free_unicity_key_count == 0:
+            achievable = math.prod(
+                col["column_generator"]["args"].get("cardinality", 1)
+                for col in table["columns"]
+                if col["is_unicity_key"]
+            )
+            if achievable < table["_number_of_rows_per_batch"]:
+                print_message(
+                    f"table '{table['table_name']}': unicity keys {unicity_keys} admit at most "
+                    f"{achievable} distinct tuples, below the requested "
+                    f"{table['_number_of_rows_per_batch']} rows/batch — output will be capped at "
+                    f"{achievable} rows. Add a high-cardinality key (e.g. an id) to scale.",
+                    False,
+                    type="warning",
                 )
 
         # one isolated RNG per (table, date, batch), shared across this

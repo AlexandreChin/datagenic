@@ -19,6 +19,7 @@ You are an expert on **datagenic**, a standalone Python package for deterministi
 |---|---|
 | Architecture, the two-stage pipeline, determinism & distribution model | `references/architecture.md` |
 | Config authoring, the IR, fine-tuning columns, `default_parameters`, table flags | `references/config.md` |
+| Domain-aware scaffolding: financial-markets generators, automatic semantic inference (`--infer-semantics`), `review-config` | `references/config.md` |
 | Implementing post-processors: technical args, `call`/`recall`, batch isolation, custom generators (incl. Faker) | `references/postprocessors.md` |
 | Running tests, the golden baseline, lint/type-check | `references/testing.md` |
 | Common errors and behaviour traps | `references/pitfalls.md` |
@@ -40,6 +41,8 @@ Read the relevant reference(s) before responding. For broad tasks, read all of t
 
 ```bash
 datagenic generate-data-config samples/ir/solutions_ir.json -o config.json --output-folder ./out
+datagenic generate-data-config ir.json -o config.json --infer-semantics heuristic  # auto-detect domain columns (heuristic|values|agent|module:function)
+datagenic review-config config.json                  # list inferred columns (lowest confidence first)
 datagenic generate-data config.json                  # sequential
 datagenic generate-data config.json --parallel 8     # all local cores (byte-identical)
 datagenic generate-data config.json --shard 1 --of 8 # one worker of a distributed run
@@ -47,6 +50,6 @@ datagenic generate-data config.json --tables orders  # a "job": orders + its ups
 datagenic check-distributable config.json            # prove sharding is byte-safe
 ```
 
-**Public API** (lazily re-exported from `datagenic`): `Configs`, `Columns` (scaffolding), `Generator` (engine), `GraphDependencies` (dependency graph). A bare `import datagenic` stays cheap — it pulls in no polars/pandas/cloud SDK.
+**Public API** (lazily re-exported from `datagenic`): `Configs`, `Columns` (scaffolding), `Generator` (engine), `GraphDependencies` (dependency graph). A bare `import datagenic` stays cheap — it pulls in no polars/pandas/cloud SDK. Domain generators live in `datagenic.generators_finance` and the scaffold-time semantic inference in `datagenic.semantics` (+ the opt-in LLM `datagenic.semantics_agent`, `[agent]` extra) — see `references/config.md`.
 
 **Requires Python ≥ 3.12.** Polars is the working frame type in the engine; pandas is accepted at boundaries and normalised.

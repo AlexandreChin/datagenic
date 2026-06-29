@@ -76,12 +76,20 @@ too: the storage layer validates via the parquet footer without downloading the 
 ## Module map (`datagenic/`)
 
 - `__init__.py` — lazy (PEP 562) public API re-exports; keep `import datagenic` cheap.
-- `scaffolding.py` — `Configs` (IR → config) and `Columns` (default-generator selection).
+- `scaffolding.py` — `Configs` (IR → config; optional `semantic_inferrer=`/`samples=` for
+  domain-aware generator selection) and `Columns` (default-generator selection).
 - `engine.py` — `Generator` (config resolution, validation, the loop, checkpointing) and
   `_Journal` (append-only JSONL run log + derived `generation_summary.json`).
 - `generators.py` — the column-generator library (`RandomFloats`, `BrownianFloats`,
   `UniqueIncrementalStrings`, array/timestamp/multivariate, …). Each is a class with `call()`
-  and optionally `recall()`.
+  and optionally `recall()` / `cardinality()`.
+- `generators_finance.py` — financial-markets domain generators (coherent asset-class →
+  instrument → risk-factor hierarchy, currency/tenor/rating/sector, ISIN/CUSIP/SEDOL with valid
+  check digits, counterparty/book/desk); fixed-vocabulary ones declare `cardinality()`.
+  Vocabularies in `_finance_data.py`.
+- `semantics.py` / `semantics_agent.py` — scaffold-time semantic inference that maps columns to
+  domain generators (no IR hand-tagging): `heuristic` / `values` inferrers (dependency-free) and
+  the opt-in LLM `agent` (`[agent]` extra, lazy `anthropic`). See `config.md`.
 - `postprocessors.py` — the two built-ins the scaffolder wires: `TemplatePostProcessor`
   (no-op hook to copy) and `KeyEnforcer` (FK / key-alignment).
 - `protocols.py` — runtime-checkable `Protocol` contracts (generators, post-processors) checked

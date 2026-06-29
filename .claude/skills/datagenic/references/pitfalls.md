@@ -20,6 +20,17 @@
 | `udf_args._input_tables` table is empty / missing | Declared table appears **later** in the config, or isn't declared | List dependencies in `udf_args._input_tables` and place them earlier |
 | A `_`-prefixed `udf_args` key is rejected by `validate()` | Leading `_` is reserved for framework args | Rename the key (only `_input_tables` is allowed) |
 
+## Domain generators & semantic inference
+
+| Symptom | Root cause | Fix |
+|---|---|---|
+| `instrument_type` / `risk_factor_group` not coherent with `asset_class` | The parent column is generated *after* the child (it reads only earlier columns) | List `asset_class` before its dependents; with inference the scaffolder reorders, and `args.asset_class_column` must name the parent |
+| `--infer-semantics agent` raises ImportError | The `anthropic` SDK isn't installed | `pip install 'datagenic[agent]'` (+ `ANTHROPIC_API_KEY`), or use `heuristic` / `values` |
+| `--infer-semantics values` infers nothing | No `samples` provided (or no matching `<table>.parquet`/`.csv` in the directory) | Pass `--samples <dir>` / `samples=`; it falls back to name heuristics per column otherwise |
+| Inference picked the wrong generator | Heuristic/agent guess; the config is the source of truth | `datagenic review-config` to spot low-confidence picks, then hand-edit `udf_name`/`args`, or set an explicit `"semantic"` on the IR column |
+| A finance-categorical unicity key collapses the row count | A small fixed domain can't fill a high-cardinality key | Pair it with an id/incremental key (`keys: ["trade_id", "asset_class"]`); the generator now declares `cardinality()` so the engine budgets the id correctly — a lone categorical key warns with its achievable ceiling |
+| A finance categorical ignores a large `cardinality` | Fixed-vocabulary generators cap `cardinality` at their domain (no fabricated values) | Expected — to widen the domain, supply `list_of_values`, or pick a higher-cardinality generator |
+
 ## Post-processor authoring
 
 | Symptom | Root cause | Fix |

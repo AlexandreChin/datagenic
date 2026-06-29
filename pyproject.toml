@@ -25,6 +25,11 @@ cloud = [
     "boto3>=1.36.0",
     "paramiko>=3.0.0",
 ]
+# LLM-backed semantic inference (`--infer-semantics agent`). Imported lazily only
+# when the agent inferrer runs, so a bare `import datagenic` pulls in no SDK.
+agent = [
+    "anthropic>=0.40.0",
+]
 
 [project.scripts]
 datagenic = "datagenic.cli:main"
@@ -32,6 +37,7 @@ datagenic = "datagenic.cli:main"
 [dependency-groups]
 dev = [
     "datagenic[cloud]",
+    "datagenic[agent]",
     "pytest>=9.0.3",
     "pytest-cov>=6.0.0",
     "mypy>=1.0.0",

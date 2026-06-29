@@ -15,6 +15,7 @@ Requires Python ≥ 3.12.
 ```bash
 uv sync                              # install all deps incl. dev + cloud groups
 # or: pip install -e ".[cloud]"      # without uv
+# or: pip install -e ".[cloud,agent]" # + the anthropic SDK for `--infer-semantics agent`
 
 pytest tests/                        # full suite
 pytest tests/test_1_data_generator.py            # one test file
@@ -30,6 +31,9 @@ CLI (installed as `datagenic`, entry point `datagenic.cli:main`):
 
 ```bash
 datagenic generate-data-config samples/ir/solutions_ir.json -o config.json --output-folder ./out
+datagenic generate-data-config ir.json -o config.json --infer-semantics heuristic       # auto-detect domain columns (heuristic|values|agent|module:function)
+datagenic generate-data-config ir.json -o config.json --infer-semantics values --samples ./sample_data  # value-based, from real sample files
+datagenic review-config config.json                  # list inferred columns (lowest confidence first) to fine-tune
 datagenic generate-data config.json                  # sequential
 datagenic generate-data config.json --parallel 8     # all local cores (byte-identical to sequential)
 datagenic generate-data config.json --shard 1 --of 8 # one worker of a distributed run
@@ -51,7 +55,7 @@ The fixtures feeding both capture and assertion live in `tests/golden/golden_fix
 
 Everything flows through **scaffold → generate**:
 
-1. **Scaffold** (`datagenic/scaffolding.py`, `Configs`): IR → a full generation config JSON. `Configs` picks a default column generator per `(type, is_unicity_key, n_keys)` via the `Columns` class, wires foreign-key enforcement (`KeyEnforcer`) onto fact tables, and optionally attaches a no-op `TemplatePostProcessor` to every table. Output is dumped with `.dump(file_path=...)`.
+1. **Scaffold** (`datagenic/scaffolding.py`, `Configs`): IR → a full generation config JSON. `Configs` picks a default column generator per `(type, is_unicity_key, n_keys)` via the `Columns` class, wires foreign-key enforcement (`KeyEnforcer`) onto fact tables, and optionally attaches a no-op `TemplatePostProcessor` to every table. Optionally, `semantic_inferrer=` (CLI `--infer-semantics`) auto-detects domain columns — e.g. financial-markets (asset class, instrument, ISIN) — and wires realistic generators, annotating each choice under `_inferred` for review. Inference is **scaffold-time only**, so the resulting config is frozen and generation stays byte-identical regardless. Output is dumped with `.dump(file_path=...)`.
 2. **Generate** (`datagenic/engine.py`, `Generator`): config → data files. `Generator(config).generate()` runs the nested loop **batch → date → table → columns → postprocessor**.
 
 The **IR** is the native input: a flat `{name, tables:[{type, name, keys, columns:[{name, type}], foreign_keys}]}`. To scaffold from another schema, pass `adaptor=fn` where `fn(source) -> IR` — a small one-time mapper from your source format to the IR. Such adaptors live in the consuming/platform package, not here — this repo stays platform-free on purpose (see "Package boundary" below).
@@ -59,9 +63,12 @@ The **IR** is the native input: a flat `{name, tables:[{type, name, keys, column
 ## Module map (`datagenic/`)
 
 - `__init__.py` — lazy (PEP 562) re-exports of the public API: `Configs`, `Columns` (scaffolding), `Generator` (engine), `GraphDependencies` (dependency_graph). A bare `import datagenic` must stay cheap — it pulls in no polars/pandas/cloud SDK. Keep it that way.
-- `scaffolding.py` — `Configs` (IR → config) and `Columns` (default-generator selection).
+- `scaffolding.py` — `Configs` (IR → config; optional `semantic_inferrer=`/`samples=` for domain-aware generator selection) and `Columns` (default-generator selection).
 - `engine.py` — the heart. `Generator` (config resolution, validation, the generation loop, checkpointing) and `_Journal` (append-only JSONL run log + derived `generation_summary.json`).
-- `generators.py` — the library of column generators (`RandomFloats`, `BrownianFloats`, `UniqueIncrementalStrings`, array/timestamp/multivariate generators, etc.). Each is a class with `call()` and optionally `recall()`.
+- `generators.py` — the library of column generators (`RandomFloats`, `BrownianFloats`, `UniqueIncrementalStrings`, array/timestamp/multivariate generators, etc.). Each is a class with `call()` and optionally `recall()` / `cardinality()`.
+- `generators_finance.py` — financial-markets domain generators: a coherent asset-class → instrument-type → risk-factor-group hierarchy (children read the partial `_table`), currency/tenor/rating/sector, ISIN/CUSIP/SEDOL with valid check digits, and counterparty/book/desk. Fixed-vocabulary categoricals declare `cardinality()` so the engine budgets unicity keys correctly (they can't exceed their domain). Vocabularies live in `_finance_data.py` (pure data, no third-party imports).
+- `semantics.py` — scaffold-time semantic inference: maps each column to a domain generator automatically so the IR needs no hand-tagging. The `SEMANTIC_GENERATORS` map, `resolve_inferrer`, and the dependency-free `heuristic` (name-based) and `values` (sample-value based) inferrers. Used by `Configs`; produces a fully hand-editable config (`_inferred` annotations).
+- `semantics_agent.py` — the opt-in LLM `agent` inferrer (Claude via the `anthropic` SDK, `[agent]` extra). Lazy-imported only when invoked, so a bare import — and `import datagenic.scaffolding` — pulls in no SDK.
 - `postprocessors.py` — the two built-ins the scaffolder wires: `TemplatePostProcessor` (no-op hook to copy/customize) and `KeyEnforcer` (FK / key-alignment).
 - `protocols.py` — runtime-checkable `Protocol` contracts for column generators and postprocessors, enforced in `Generator.validate()`. **Read this to understand the UDF contract**, including the `INPUT_SCOPE` shardability declaration.
 - `dtypes.py` — frame/dtype helpers and the `_Ungenerated` sentinel (referencing a table before it's produced raises, instead of silently yielding an empty frame).

@@ -101,6 +101,31 @@ def main():
         help="Map a non-IR input JSON to the IR, e.g. mypkg.adaptors:my_adaptor. "
         "Omit when input is already IR.",
     )
+    gen_config_parser.add_argument(
+        "--infer-semantics",
+        dest="infer_semantics",
+        metavar="heuristic|values|agent|module:function",
+        default=None,
+        help="Auto-detect each column's domain meaning during scaffolding and wire "
+        "a realistic generator (e.g. financial-markets asset class / instrument / "
+        "ISIN). 'heuristic' uses column-name rules; 'module:function' supplies a "
+        "custom inferrer. Inferred columns are annotated for manual review "
+        "(see 'datagenic review-config'). Omit to disable.",
+    )
+    gen_config_parser.add_argument(
+        "--samples",
+        metavar="DIR | {table:path}",
+        help="Sample data for value-based inference ('--infer-semantics values'): a "
+        "directory holding <table>.parquet/<table>.csv per table, or an inline/"
+        "file JSON map of table->path. Lets the inferrer read real values.",
+    )
+
+    review_parser = sub.add_parser(
+        "review-config",
+        help="List columns whose generator was inferred during scaffolding "
+        "(lowest confidence first), so you can fine-tune the config by hand",
+    )
+    review_parser.add_argument("config", help="Path to generator config JSON")
 
     args = parser.parse_args()
 
@@ -150,6 +175,14 @@ def main():
                 parser.error("--adaptor must be 'module:function'")
             adaptor = getattr(importlib.import_module(module_name), func_name)
 
+        # samples: a directory string, an inline JSON map, or a .json map file
+        samples = args.samples
+        if samples and samples.lstrip().startswith("{"):
+            samples = json.loads(samples)
+        elif samples and samples.endswith(".json"):
+            with open(samples) as f:
+                samples = json.load(f)
+
         Configs(
             input=source,
             adaptor=adaptor,
@@ -165,7 +198,39 @@ def main():
             seed=args.seed,
             enforce_fk=args.enforce_fk,
             template_postprocessors=args.template_postprocessors,
+            semantic_inferrer=args.infer_semantics,
+            samples=samples,
         ).dump(file_path=args.output)
+
+    elif args.command == "review-config":
+        import json
+
+        with open(args.config) as f:
+            config = json.load(f)
+
+        rows = []
+        for table in config.get("tables", []):
+            for col in table.get("columns", []):
+                inferred = col.get("_inferred")
+                if inferred:
+                    rows.append((table["table_name"], col["col_name"], inferred))
+
+        if not rows:
+            print("No inferred columns in this config (scaffolded without --infer-semantics).")
+        else:
+            rows.sort(key=lambda r: r[2].get("confidence", 0.0))
+            print(f"{len(rows)} inferred column(s), lowest confidence first:")
+            for table_name, col_name, inferred in rows:
+                parent = f", parent={inferred['parent']}" if inferred.get("parent") else ""
+                alts = (
+                    f", alternatives={inferred['alternatives']}"
+                    if inferred.get("alternatives")
+                    else ""
+                )
+                print(
+                    f"  [{inferred.get('confidence', 0.0):.2f}] {table_name}.{col_name} "
+                    f"-> {inferred['semantic']} (by {inferred['by']}{parent}{alts})"
+                )
 
 
 if __name__ == "__main__":

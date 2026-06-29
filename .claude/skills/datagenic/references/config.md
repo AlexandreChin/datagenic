@@ -112,13 +112,55 @@ parameters (pre-filled with defaults):
   (string labels), `size_of_arrays` (array columns).
 - **Pin exact values** — most generators accept `list_of_values` + `probabilities`, e.g.
   `"list_of_values": ["EUR","USD","GBP"], "probabilities": [0.5,0.3,0.2]`.
-- **Swap the generator** — change `udf_name` to any built-in in `datagenic.generators` and set
-  its `args`.
+- **Swap the generator** — change `udf_name` to any built-in in `datagenic.generators` (or
+  `datagenic.generators_finance` for realistic financial-markets values) and set its `args`.
 - **Use your own** — point `udf_module`/`udf_name` at a custom generator on the PYTHONPATH.
 
 Editing `args`, `seed`, or row counts changes the **config hash**, so a re-run regenerates the
 affected files instead of reusing stale checkpoints. Relocating output or only extending the
 date range preserves reuse (that's what `extend=True` is for).
+
+## Domain-aware scaffolding & semantic inference
+
+Beyond the type-based default generators, the scaffolder can detect a column's **domain
+meaning** and wire a realistic generator automatically — currently financial markets
+(`datagenic.generators_finance`). This happens **at scaffold time only**, so the result is a
+normal frozen config; generation determinism is unaffected.
+
+**Finance generators** (`udf_module: "datagenic.generators_finance"`):
+
+- Coherent hierarchy — `FinancialAssetClass` → `FinancialInstrumentType` /
+  `FinancialRiskFactorGroup`. The children read the partial row and sample values valid for
+  that row's asset class, so the parent column must be **generated first** (list it earlier;
+  the scaffolder reorders inferred ones). The child's `args.asset_class_column` names the parent.
+- Market dims — `Currency`, `CurrencyPair`, `Tenor`, `CreditRating` (`scale`), `GICSSector`.
+- Identifiers — `ISIN`/`CUSIP`/`SEDOL` (valid check digits), `InstrumentName`, `RiskFactorName`.
+- Org — `Counterparty`, `TradingBook`, `Desk`.
+
+**Inference** — `Configs(input=ir, semantic_inferrer=..., samples=...)`, or CLI
+`--infer-semantics` / `--samples`:
+
+| Strategy | Basis | Needs |
+|---|---|---|
+| `heuristic` | column-name patterns | nothing (dependency-free) |
+| `values` | sample values (vocab membership, ISIN/CUSIP/SEDOL checksum); name fallback | `samples=` (dict of frames/paths, or a directory of `<table>.parquet`/`.csv`) |
+| `agent` | LLM (Claude) for ambiguous columns | `pip install 'datagenic[agent]'` + `ANTHROPIC_API_KEY` |
+| `module:function` | your own `fn(table, columns, samples=None) -> {col: {semantic, confidence, parent, ...}}` | — |
+
+An explicit `"semantic"` on an IR column **overrides** inference. Each inferred column gets an
+`_inferred` block (semantic, confidence, source) beside `column_generator` — ignored by the
+engine, surfaced by `datagenic review-config config.json` (lowest confidence first) so you can
+fine-tune. The inferrer never hand-edits the config beyond the generator choice; everything
+stays editable.
+
+**Cardinality on fixed-domain categoricals.** A finance categorical has a small fixed
+vocabulary, so it declares a `cardinality()` method: the engine consults it when distributing
+the per-key cardinality budget across unicity keys (generalising the datetime special case to
+any generator that defines `cardinality()`), and the generator honors an assigned `cardinality`
+as a **cap** (it slices its vocab; it cannot exceed the domain — no fabricated values). As a
+unicity key, pair it with a high-cardinality key (an id) — a lone small-domain key can't reach a
+large row count, and generation warns with the achievable ceiling rather than silently dedup-
+collapsing the table.
 
 ## `number_of_rows` as a dynamic reference
 
