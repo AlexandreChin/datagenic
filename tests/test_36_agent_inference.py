@@ -5,16 +5,25 @@ the client is injectable, so these tests exercise the prompt-build / parse /
 parent-link path with a fake client — no network, no SDK required.
 """
 
+import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from datagenic import Configs
 from datagenic.semantics import resolve_inferrer
 from datagenic.semantics_agent import agent_inferrer
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# the live smoke test needs both the SDK and a key; otherwise it's skipped
+_AGENT_AVAILABLE = importlib.util.find_spec("anthropic") is not None and bool(
+    os.environ.get("ANTHROPIC_API_KEY")
+)
 
 
 # ── fake anthropic client ─────────────────────────────────────────────────────
@@ -173,3 +182,32 @@ def test_resolving_agent_does_not_import_anthropic():
 
 def test_resolve_agent_returns_callable():
     assert callable(resolve_inferrer("agent"))
+
+
+# ── live smoke test (real Claude call; skipped without SDK + key) ─────────────
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not _AGENT_AVAILABLE, reason="needs the anthropic SDK and ANTHROPIC_API_KEY")
+def test_agent_live_smoke():
+    """End-to-end against the real API: unambiguous finance columns are labelled,
+    the hierarchy child links to the asset_class column, and a plain id is left
+    alone. Lenient on the LLM's exact choices — asserts only the obvious mappings."""
+    columns = [
+        {"name": "trade_id", "type": "int"},
+        {"name": "asset_class", "type": "string"},
+        {"name": "instrument_type", "type": "string"},
+        {"name": "ccy", "type": "string"},
+        {"name": "isin", "type": "string"},
+    ]
+    out = agent_inferrer("trades", columns)  # builds a real anthropic.Anthropic()
+
+    assert out.get("ccy", {}).get("semantic") == "currency"
+    assert out.get("isin", {}).get("semantic") == "isin"
+    assert out.get("asset_class", {}).get("semantic") == "asset_class"
+    if "instrument_type" in out:  # if detected, it must be coherent-wired
+        assert out["instrument_type"]["semantic"] == "instrument_type"
+        assert out["instrument_type"]["parent"] == "asset_class"
+    assert "trade_id" not in out  # not a finance semantic
+    # confidences are usable floats in [0, 1]
+    assert all(0.0 <= rec["confidence"] <= 1.0 for rec in out.values())
