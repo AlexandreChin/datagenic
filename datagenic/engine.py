@@ -431,6 +431,60 @@ class Generator:
         """
         return numpy.random.default_rng(self._derive_seed(global_seed, table_name, date, batch))
 
+    def _apply_null_mask(
+        self,
+        series,
+        null_spec,
+        *,
+        partial_df,
+        global_seed,
+        table_name,
+        col_name,
+        date,
+        batch,
+    ):
+        """Null out a fraction of a column's values per its opt-in ``null_spec``.
+
+        ``null_spec`` is ``{"rate": <0..1>}`` (missing-completely-at-random; rate
+        defaults to 1.0), optionally with ``{"when": "<expr over _table>"}`` to
+        restrict nulls to rows where a boolean expression on the already-built
+        columns holds (missing-at-random). The mask is drawn from an RNG seeded per
+        ``(table, column, date, batch)``, so it is deterministic and shard-safe and
+        toggling it on one column never perturbs another column's values. Returns the
+        series unchanged when no spec is set (the default — zero effect on existing
+        configs). Unicity keys are never nulled (rejected at ``validate()``).
+        """
+        if not null_spec:
+            return series
+        rate = null_spec.get("rate", 1.0)
+        n = len(series)
+        if rate <= 0 or n == 0:
+            return series
+        null_rng = self._make_rng(global_seed, f"{table_name}:null:{col_name}", date, batch)
+        mask = null_rng.random(n) < rate
+        when = null_spec.get("when")
+        if when:
+            try:
+                cond = eval(  # noqa: S307 — same eval contract as InternalMappings/Evals
+                    when, {"__builtins__": {}}, {"_table": partial_df, "pl": pl, "np": numpy}
+                )
+            except Exception as e:
+                raise ValueError(
+                    f"null_spec.when for column '{col_name}' failed to evaluate "
+                    f"({type(e).__name__}: {e}); it must be a boolean expression over _table "
+                    f"referencing only columns generated before '{col_name}'"
+                ) from e
+            cond_arr = cond.to_numpy() if hasattr(cond, "to_numpy") else numpy.asarray(cond)
+            mask = mask & cond_arr.astype(bool)
+        if not mask.any():
+            return series
+        # dtype-preserving null assignment (a fully-nulled column keeps its dtype)
+        return (
+            pl.DataFrame({"_v": series, "_m": pl.Series(mask)})
+            .select(pl.when(pl.col("_m")).then(None).otherwise(pl.col("_v")).alias(series.name))
+            .to_series()
+        )
+
     def _with_context(self, fn, udf_args, *, table, date, batch, unit):
         """Run ``fn(**udf_args)``, re-raising any error with table/date/batch context.
 
@@ -645,6 +699,24 @@ class Generator:
                 col_where = f"table '{name}' column '{col.get('col_name')}'"
                 gen_cls = self._load_udf_class(cg.get("udf_module"), cg.get("udf_name"), col_where)
                 self._check_udf_contract(gen_cls, col_where)
+
+                # null injection: opt-in null_spec must be well-formed and never on a key
+                null_spec = col.get("null_spec")
+                if null_spec is not None:
+                    if not isinstance(null_spec, dict):
+                        raise ValueError(f"{col_where}: null_spec must be an object")
+                    if col.get("is_unicity_key"):
+                        raise ValueError(
+                            f"{col_where}: null_spec is not allowed on a unicity key — "
+                            f"nulls would break key dedup and FK pools"
+                        )
+                    rate = null_spec.get("rate", 1.0)
+                    if (
+                        not isinstance(rate, (int, float))
+                        or isinstance(rate, bool)
+                        or not (0.0 <= rate <= 1.0)
+                    ):
+                        raise ValueError(f"{col_where}: null_spec.rate must be a number in [0, 1]")
 
             # postprocessor checks
             pp = table.get("post_processor") or {}
@@ -891,7 +963,18 @@ class Generator:
                 batch=effective_batch,
                 unit=f"column generator '{column['col_name']}'",
             )
-            columns_data.append(_as_pl_series(column["col_name"], values))
+            series = _as_pl_series(column["col_name"], values)
+            series = self._apply_null_mask(
+                series,
+                column.get("null_spec"),
+                partial_df=pl.DataFrame(columns_data),
+                global_seed=global_seed,
+                table_name=table["table_name"],
+                col_name=column["col_name"],
+                date=date,
+                batch=effective_batch,
+            )
+            columns_data.append(series)
         df = pl.DataFrame(columns_data)
 
         # store for use in postprocessors and recall
@@ -1003,7 +1086,18 @@ class Generator:
                     batch=effective_batch,
                     unit=f"column generator '{column['col_name']}' (recall)",
                 )
-                recalled.append(_as_pl_series(column["col_name"], values))
+                series = _as_pl_series(column["col_name"], values)
+                series = self._apply_null_mask(
+                    series,
+                    column.get("null_spec"),
+                    partial_df=pl.DataFrame(recalled),
+                    global_seed=global_seed,
+                    table_name=table["table_name"],
+                    col_name=column["col_name"],
+                    date=date,
+                    batch=effective_batch,
+                )
+                recalled.append(series)
         if recalled:
             return current_df.with_columns(recalled)
         return current_df

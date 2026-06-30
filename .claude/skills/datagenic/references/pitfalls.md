@@ -19,6 +19,11 @@
 | `ValueError: type must be 'fact' or 'referential'` | Typo in the IR `type` value | Fix the value; omit `type` to default to `referential` |
 | `udf_args._input_tables` table is empty / missing | Declared table appears **later** in the config, or isn't declared | List dependencies in `udf_args._input_tables` and place them earlier |
 | A `_`-prefixed `udf_args` key is rejected by `validate()` | Leading `_` is reserved for framework args | Rename the key (only `_input_tables` is allowed) |
+| `validate()` rejects `null_spec` on a column | `null_spec` is on a unicity key, or `rate` is outside [0, 1] | Move it to a non-key column; keep `rate` in [0, 1] (nullable FKs → a `KeyEnforcer` rule) |
+| `null_spec` nulls produce no nulls / wrong rows | `rate` ≤ 0, or `when` references a column generated *after* this one (not yet in `_table`) | Set `rate` in (0, 1]; reference only earlier columns in `when` (reorder if needed) |
+| A column-level `null_spec` on an FK column is overwritten | FK enforcement (`KeyEnforcer`) runs after generation and resamples the column | Express nullable FKs via the FK `null_rate` hint, not `null_spec` |
+| FK `null_rate` / `fanout` has no effect | The hint is on a unicity-key FK column (ignored — nulls/repeats would break dedup), or on a `referential` table's FK (only fact tables get `KeyEnforcer`) | Put it on a non-key FK column of a `fact` table |
+| `fanout` doesn't give a hard global min/max | It's a per-batch (distributional) guarantee — across batches counts sum | Expected; for a true global bound make the parent/child a `single_batch` table |
 
 ## Domain generators & semantic inference
 

@@ -162,6 +162,28 @@ unicity key, pair it with a high-cardinality key (an id) — a lone small-domain
 large row count, and generation warns with the achievable ceiling rather than silently dedup-
 collapsing the table.
 
+## Missing values (`null_spec`)
+
+Any **non-key** column may carry an optional `null_spec` to null a fraction of its values.
+Scaffolded from the IR hints `null_rate` / `null_when`; also hand-editable in the config:
+
+```json
+{"col_name": "amount", "col_type": "float", "is_unicity_key": false,
+ "column_generator": { ... },
+ "null_spec": {"rate": 0.1}}
+```
+
+- `rate` — null probability in [0, 1] (defaults to 1.0 when only `when` is given).
+- `when` — boolean expression over `_table` (columns generated *before* this one); nulls are
+  restricted to matching rows (MAR), e.g. `{"rate": 0.3, "when": "_table['status'] == 'pending'"}`.
+
+The mask is drawn from a per-`(table, column, date, batch)` RNG (`Generator._apply_null_mask`),
+so it's deterministic, shard-safe, and isolated per column (toggling it on one column doesn't
+perturb another). `validate()` rejects `null_spec` on a unicity key (would break dedup / FK
+pools) and a `rate` outside [0, 1]. A fully-nulled column keeps its declared dtype. For nullable
+**foreign keys**, prefer a `KeyEnforcer` rule — FK enforcement runs after generation and would
+overwrite a column-level mask.
+
 ## `number_of_rows` as a dynamic reference
 
 ```json
@@ -183,6 +205,21 @@ draw only from the referenced table's value pool:
   "trade_fact": { "srcCurrency": ["fx_dim.srcCurrency"], "csaId": ["csa_dim.csaId"] }
 }
 ```
+
+**Optional & fan-out FKs.** An IR `foreign_keys` entry may add `null_rate` and/or `fanout`,
+which the scaffolder attaches to the emitted `KeyEnforcer` rule:
+
+```jsonc
+{"column": "customer_id", "references": "customers.id",
+ "null_rate": 0.1,                                  // optional FK — 10% null (no orphans otherwise)
+ "fanout": {"dist": "uniform", "min": 1, "max": 5}} // each parent referenced ~1..5 times
+```
+
+`KeyEnforcer` applies these to **non-key** FK columns only, from a numpy RNG seeded off the
+postprocessor `_seed` — deterministic and **batch-local**, so the table stays shardable
+(`check-distributable` passes, `INPUT_SCOPE` remains `"batch"`). `fanout` uses target-count
+semantics trimmed/padded to the child row count; the guarantee is per-batch (distributional),
+not a hard global min/max — a global bound needs a `single_batch` table.
 
 ## `udf_args` naming convention
 

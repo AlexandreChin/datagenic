@@ -287,7 +287,16 @@ class Configs:
             entry = {
                 "name": table["name"],
                 "unicityKey": list(table.get("keys", [])),
-                "columns": [{"name": c["name"], "dataType": c["type"]} for c in table["columns"]],
+                "columns": [
+                    {
+                        "name": c["name"],
+                        "dataType": c["type"],
+                        # optional null-injection hints, carried through to null_spec
+                        "null_rate": c.get("null_rate"),
+                        "null_when": c.get("null_when"),
+                    }
+                    for c in table["columns"]
+                ],
             }
             if table.get("type") == "fact":
                 internal["tables"]["fact"].append(entry)
@@ -354,6 +363,8 @@ class Configs:
         self._sample_data = self._normalize_samples(samples)
         self._semantics: dict = {}
         self._compute_semantics()
+        # per-(fact, fk-column) KeyEnforcer rule options (null_rate / fanout) from the IR
+        self._fk_options = self._compute_fk_options()
 
         self.enforce_fk = enforce_fk
         self.template_postprocessors = template_postprocessors
@@ -434,6 +445,7 @@ class Configs:
                 )
 
                 self._apply_semantic(temp_col, table["name"])
+                self._apply_null_spec(temp_col, col)
                 temp_table["columns"].append(temp_col)
 
             self._order_for_coherence(temp_table["columns"])
@@ -483,6 +495,7 @@ class Configs:
                 )
 
                 self._apply_semantic(temp_col, table["name"])
+                self._apply_null_spec(temp_col, col)
                 temp_table["columns"].append(temp_col)
 
             self._order_for_coherence(temp_table["columns"])
@@ -531,6 +544,7 @@ class Configs:
                 )
 
                 self._apply_semantic(temp_col, table["name"])
+                self._apply_null_spec(temp_col, col)
                 temp_table["columns"].append(temp_col)
 
             self._order_for_coherence(temp_table["columns"])
@@ -588,6 +602,7 @@ class Configs:
                 )
 
                 self._apply_semantic(temp_col, table["name"])
+                self._apply_null_spec(temp_col, col)
                 temp_table["columns"].append(temp_col)
 
             # wire a KeyEnforcer postprocessor so fact-table FK columns draw from
@@ -731,6 +746,25 @@ class Configs:
         }
 
     @staticmethod
+    def _apply_null_spec(temp_col: dict, col: dict) -> None:
+        """Wire a column's ``null_spec`` from IR hints (``null_rate`` / ``null_when``).
+
+        No-op when neither hint is present (so existing configs are unchanged). The
+        engine applies the spec at generation time; nulls on a unicity key are
+        rejected by ``Generator.validate()``.
+        """
+        rate = col.get("null_rate")
+        when = col.get("null_when")
+        if rate is None and not when:
+            return
+        spec: dict = {}
+        if rate is not None:
+            spec["rate"] = rate
+        if when:
+            spec["when"] = when
+        temp_col["null_spec"] = spec
+
+    @staticmethod
     def _order_for_coherence(columns: list[dict]) -> None:
         """Stably reorder so any column whose inferred parent is in the same table
         comes after that parent: the engine builds columns top-to-bottom and a
@@ -750,6 +784,8 @@ class Configs:
         Each FK column becomes a {"col", "from"} sample rule drawing from the
         referenced table's key pool (a list of refs => intersection). The asof
         `Date` column is excluded — it is the partition date, not a foreign key.
+        Optional per-FK ``null_rate`` / ``fanout`` hints (from the IR) are attached to
+        the rule so KeyEnforcer can make the FK nullable or shape its multiplicity.
         """
         fk = self.config_template["default_parameters"]["postprocessor_args"].get(
             "fk_enforcement", {}
@@ -758,9 +794,28 @@ class Configs:
         rules = []
         referenced: list[str] = []
         for col, ref_list in cols.items():
-            rules.append({"col": col, "from": ref_list if len(ref_list) > 1 else ref_list[0]})
+            rule = {"col": col, "from": ref_list if len(ref_list) > 1 else ref_list[0]}
+            rule.update(self._fk_options.get((fact_table_name, col), {}))
+            rules.append(rule)
             referenced.extend(ref.split(".")[0] for ref in ref_list)
         return rules, sorted(set(referenced))
+
+    def _compute_fk_options(self) -> dict:
+        """Per-(fact table, FK column) extra KeyEnforcer rule options read from the IR
+        ``foreign_keys`` hints (``null_rate``, ``fanout``). Empty when none are set."""
+        opts: dict = {}
+        for table in self._ir["tables"]:
+            if table.get("type") != "fact":
+                continue
+            for fk in table.get("foreign_keys", []):
+                option = {}
+                if fk.get("null_rate") is not None:
+                    option["null_rate"] = fk["null_rate"]
+                if fk.get("fanout"):
+                    option["fanout"] = fk["fanout"]
+                if option:
+                    opts[(table["name"], fk["column"])] = option
+        return opts
 
     def _build_fk_enforcement(self) -> dict:
         """Build fk_enforcement from the IR's join definitions.

@@ -11,6 +11,7 @@ distinct from this ``datagenic.postprocessors`` module):
   when ``enforce_fk=True`` (the default).
 """
 
+import numpy as np
 import polars as pl
 
 
@@ -98,6 +99,16 @@ class KeyEnforcer:
           Same as above but cross-joined with every unique value of CrossTable.col,
           producing the full cartesian key space.
 
+      {"col": "dest", "from": "Table.col", "null_rate": 0.2}
+          Nullable / optional FK: after sampling from the pool, null ~null_rate of the
+          values. Non-key columns only; deterministic and batch-local (shardable).
+
+      {"col": "dest", "from": "Table.col", "fanout": {"dist": "uniform", "min": 1, "max": 5}}
+          Control relationship multiplicity: each parent is referenced ~min..max times
+          (target-count semantics), trimmed/padded to the child row count. Per-batch
+          distributional — not a hard global min/max — and batch-local (shardable).
+          Non-key columns only. A true global guarantee needs a single_batch table.
+
     After all rules, duplicate rows are dropped on the unicity keys (if any).
     """
 
@@ -118,6 +129,10 @@ class KeyEnforcer:
         """
         df = _as_pl(_table)
         curr = df  # kept for fact-value sampling in tuple rules
+        # auxiliary RNG for nullable-FK / fan-out rules: seeded from the unit's
+        # post_seed so it is deterministic and batch-local (shardable). Independent
+        # of the polars `.sample(seed=...)` stream used by the plain sample rule.
+        aux_rng = np.random.default_rng(_seed)
 
         for rule in rules:
             # --- copy rule ---
@@ -206,18 +221,56 @@ class KeyEnforcer:
                 pool = sorted(sets[0] if len(sets) == 1 else set.intersection(*sets))
                 if not pool:
                     raise ValueError(f"KeyEnforcer: empty pool for {col} from {sources}")
-                df = df.with_columns(
-                    pl.Series(
-                        col,
+                # fan-out / nullable-FK apply to non-key columns only (nulls or repeated
+                # values in a key would break the unique() dedup below).
+                is_key = col in (_unicity_keys or [])
+                if rule.get("fanout") and not is_key:
+                    values = self._fanout_assign(pool, len(df), rule["fanout"], aux_rng)
+                else:
+                    # unchanged plain-sample path (byte-identical for existing FK configs)
+                    values = (
                         pl.Series(pool)
                         .sample(n=len(df), with_replacement=True, seed=_seed)
-                        .to_list(),
+                        .to_list()
                     )
-                )
+                df = df.with_columns(pl.Series(col, values))
+                if rule.get("null_rate") and not is_key:
+                    null_mask = aux_rng.random(len(df)) < float(rule["null_rate"])
+                    df = df.with_columns(pl.Series("__null_mask", null_mask)).with_columns(
+                        pl.when(pl.col("__null_mask")).then(None).otherwise(pl.col(col)).alias(col)
+                    )
+                    df = df.drop("__null_mask")
 
         if _unicity_keys:
             df = df.unique(subset=_unicity_keys, maintain_order=True)
         return df
+
+    @staticmethod
+    def _fanout_assign(pool: list, n: int, fanout: dict, rng) -> list:
+        """Assign each of ``n`` child rows a parent so per-parent child counts follow
+        ``fanout`` (target-count semantics).
+
+        Draws a target count per parent from a uniform ``[min, max]``, builds the
+        assignment multiset, then trims (shuffle + head) or pads (draw proportional to
+        the targets) to exactly ``n`` rows. Deterministic via ``rng`` and batch-local,
+        so the per-parent count distribution holds within each batch; across batches it
+        is the sum (a distributional, not hard-global, guarantee).
+        """
+        lo = max(0, int(fanout.get("min", 1)))
+        hi = max(lo, int(fanout.get("max", lo)))
+        parents = np.asarray(pool, dtype=object)
+        counts = rng.integers(lo, hi + 1, size=len(parents))
+        assignments = np.repeat(parents, counts)
+        if len(assignments) >= n:
+            rng.shuffle(assignments)
+            out = assignments[:n]
+        else:
+            total = int(counts.sum())
+            probs = (counts / total) if total > 0 else None
+            extra = rng.choice(parents, size=n - len(assignments), p=probs)
+            out = np.concatenate([assignments, extra])
+            rng.shuffle(out)
+        return out.tolist()
 
     def call(
         self, _table, _input_tables, rules: list, _unicity_keys=None, _seed: int = 42, **kwargs

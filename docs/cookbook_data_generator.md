@@ -244,6 +244,87 @@ column overrides inference.
 
 ---
 
+## Missing values (null injection)
+
+Any non-key column can carry an optional **`null_spec`** so a fraction of its
+values come out null — useful for realistic, incomplete data. Add the IR hints
+`null_rate` (and optionally `null_when`); the scaffolder turns them into a
+`null_spec` on the column:
+
+```python
+Configs(input={
+    "name": "shop",
+    "tables": [{
+        "type": "fact", "name": "orders", "keys": ["order_id"],
+        "columns": [
+            {"name": "order_id", "type": "int"},
+            {"name": "amount",   "type": "float",  "null_rate": 0.1},   # 10% missing at random
+            {"name": "coupon",   "type": "string", "null_when": "_table['amount'] > 1000"},  # MAR
+        ],
+    }],
+}).dump(file_path="config.json")
+```
+
+In the generated config that becomes, e.g.:
+
+```jsonc
+{"col_name": "amount", "col_type": "float", "is_unicity_key": false,
+ "column_generator": { ... },
+ "null_spec": {"rate": 0.1}}
+```
+
+- **`rate`** — probability a value is nulled (0–1; defaults to 1.0 when only
+  `when` is given).
+- **`when`** — a boolean expression over `_table` (the columns generated *before*
+  this one), restricting nulls to matching rows. `null_spec: {"rate": 0.3,
+  "when": "_table['status'] == 'pending'"}` nulls 30% of the pending rows.
+
+The mask is drawn from a per-`(table, column, date, batch)` RNG, so it's
+**deterministic and shard-safe**, and adding `null_spec` to one column never
+changes another column's values. You can also add/edit `null_spec` directly in
+the config.
+
+> Nulls on a **unicity key** are rejected by validation (they'd break key dedup
+> and FK pools). A nullable **foreign-key** column is better expressed through
+> `KeyEnforcer` (FK enforcement runs after generation and would overwrite a
+> column-level null mask).
+
+---
+
+## Optional & fan-out foreign keys
+
+FK enforcement (the `KeyEnforcer` wired onto fact tables) can also shape the
+*relationship*, via two optional hints on an IR `foreign_keys` entry:
+
+```python
+Configs(input={
+    "name": "shop",
+    "tables": [
+        {"type": "referential", "name": "customers", "keys": ["id"],
+         "columns": [{"name": "id", "type": "string"}]},
+        {"type": "fact", "name": "orders", "keys": ["order_id"],
+         "columns": [{"name": "order_id", "type": "int"}, {"name": "customer_id", "type": "string"}],
+         "foreign_keys": [{
+             "column": "customer_id", "references": "customers.id",
+             "null_rate": 0.1,                                  # optional FK: 10% of orders have no customer
+             "fanout": {"dist": "uniform", "min": 1, "max": 5}, # each customer referenced ~1–5 times
+         }]},
+    ],
+}).dump(file_path="config.json")
+```
+
+- **`null_rate`** — makes the FK optional: that fraction of child rows get a null
+  FK (the rest still draw only from the parent's key pool — no orphans).
+- **`fanout`** — controls multiplicity: each parent is referenced ~`min..max`
+  times (target-count semantics), trimmed/padded to the child row count.
+
+Both are **deterministic and batch-local**, so the table stays shardable
+(`datagenic check-distributable` passes). They apply to **non-key** FK columns
+only. The fan-out guarantee is *per batch* (across batches it's the sum, not a
+hard global min/max); a true global bound needs a `single_batch` reference table.
+
+---
+
 ## Scaling up: one config, generate anywhere
 
 Write **one config**, then scale by adding a flag. Every form below produces
