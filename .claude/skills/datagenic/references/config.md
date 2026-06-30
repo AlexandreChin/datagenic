@@ -39,6 +39,19 @@ Configs(input="ir.json").dump(file_path="config.json")          # IR dict or JSO
 Configs(input=src, adaptor=my_adaptor).dump(file_path="config.json")  # any schema via fn(source)->IR
 ```
 
+## Profile from a sample (no IR)
+
+`datagenic.profiling.build_config(sources)` (CLI `profile`) scaffolds a config straight from
+sample **data files** — the user authors no IR. It reads frames, synthesises the IR internally
+(tables, key candidates = all-distinct int/string columns, FK candidates = value-set ⊆ another
+table's key) and fits generator args from the data: low-cardinality → `list_of_values` +
+`probabilities`, high-cardinality → `cardinality`, float → `mu`/`sigma`, null fraction →
+`null_spec.rate` (or FK `null_rate`), per-table `number_of_rows` from the sample. Then it runs
+`Configs` and merges the fitted args on. `sources` is a directory (`<table>.parquet`/`.csv`) or a
+`{table: frame|path}` dict; `--emit-ir` writes the synthesised IR for review. Key/FK detection is
+heuristic — review the emitted IR/config and hand-edit. Compose with `semantic_inferrer=` /
+`--infer-semantics` to also pick domain generators.
+
 ## Generation config — top-level structure
 
 ```json

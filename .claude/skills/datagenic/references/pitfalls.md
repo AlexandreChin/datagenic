@@ -25,6 +25,14 @@
 | FK `null_rate` / `fanout` has no effect | The hint is on a unicity-key FK column (ignored — nulls/repeats would break dedup), or on a `referential` table's FK (only fact tables get `KeyEnforcer`) | Put it on a non-key FK column of a `fact` table |
 | `fanout` doesn't give a hard global min/max | It's a per-batch (distributional) guarantee — across batches counts sum | Expected; for a true global bound make the parent/child a `single_batch` table |
 
+## Profile from a sample (`profile` / `build_config`)
+
+| Symptom | Root cause | Fix |
+|---|---|---|
+| A continuous numeric column became a key | Key candidates are all-distinct **int/string** only — floats are excluded — but an all-distinct int still qualifies | Mark the right `keys` by hand in the emitted IR (`--emit-ir`), or drop the spurious key |
+| A wrong / missing foreign key | FK detection is a heuristic (value-set ⊆ another single-column key, ≥2 distinct) | Review `--emit-ir` and edit `foreign_keys`; FK to a composite key isn't auto-detected |
+| Regenerated high-cardinality values don't match the sample | High-card numeric/string is fitted on `cardinality` / `mu`-`sigma`, not exact values (only low-card → `list_of_values`) | Raise `--max-categorical`, or hand-set `list_of_values` for that column |
+
 ## Domain generators & semantic inference
 
 | Symptom | Root cause | Fix |

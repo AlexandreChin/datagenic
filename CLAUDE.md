@@ -33,6 +33,7 @@ CLI (installed as `datagenic`, entry point `datagenic.cli:main`):
 datagenic generate-data-config samples/ir/solutions_ir.json -o config.json --output-folder ./out
 datagenic generate-data-config ir.json -o config.json --infer-semantics heuristic       # auto-detect domain columns (heuristic|values|agent|module:function)
 datagenic generate-data-config ir.json -o config.json --infer-semantics values --samples ./sample_data  # value-based, from real sample files
+datagenic profile ./sample_data -o config.json      # scaffold a config straight from sample files (no IR) — infers keys/FKs + fits generator args
 datagenic review-config config.json                  # list inferred columns (lowest confidence first) to fine-tune
 datagenic generate-data config.json                  # sequential
 datagenic generate-data config.json --parallel 8     # all local cores (byte-identical to sequential)
@@ -69,6 +70,7 @@ The **IR** is the native input: a flat `{name, tables:[{type, name, keys, column
 - `generators_finance.py` — financial-markets domain generators: a coherent asset-class → instrument-type → risk-factor-group hierarchy (children read the partial `_table`), currency/tenor/rating/sector, ISIN/CUSIP/SEDOL with valid check digits, and counterparty/book/desk. Fixed-vocabulary categoricals declare `cardinality()` so the engine budgets unicity keys correctly (they can't exceed their domain). Vocabularies live in `_finance_data.py` (pure data, no third-party imports).
 - `semantics.py` — scaffold-time semantic inference: maps each column to a domain generator automatically so the IR needs no hand-tagging. The `SEMANTIC_GENERATORS` map, `resolve_inferrer`, and the dependency-free `heuristic` (name-based) and `values` (sample-value based) inferrers. Used by `Configs`; produces a fully hand-editable config (`_inferred` annotations).
 - `semantics_agent.py` — the opt-in LLM `agent` inferrer (Claude via the `anthropic` SDK, `[agent]` extra). Lazy-imported only when invoked, so a bare import — and `import datagenic.scaffolding` — pulls in no SDK.
+- `profiling.py` — **profile-from-sample** scaffolding (CLI `profile`): `build_config(sources)` reads sample files, synthesises an IR (tables, key & FK candidates) and fits generator args (cardinality, mu/sigma, value frequencies → `list_of_values`/`probabilities`, null rate) from the data, then scaffolds via `Configs`. The IR is internal (optionally emitted); the user supplies only files. Scaffold-time only, so generation stays deterministic.
 - `postprocessors.py` — the two built-ins the scaffolder wires: `TemplatePostProcessor` (no-op hook to copy/customize) and `KeyEnforcer` (FK / key-alignment).
 - `protocols.py` — runtime-checkable `Protocol` contracts for column generators and postprocessors, enforced in `Generator.validate()`. **Read this to understand the UDF contract**, including the `INPUT_SCOPE` shardability declaration.
 - `dtypes.py` — frame/dtype helpers and the `_Ungenerated` sentinel (referencing a table before it's produced raises, instead of silently yielding an empty frame).

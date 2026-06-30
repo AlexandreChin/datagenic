@@ -152,6 +152,43 @@ uv run python -m datagenic.cli generate-data-config my_schema.json \
 
 ---
 
+## Profile from a sample (scaffold a config from data files — no IR)
+
+Already have representative data? Point datagenic at a folder of sample files and
+get a config back — **you never author an IR**. It infers the tables, columns,
+key & foreign-key candidates and *fits generator args* (cardinality, mean/std,
+value frequencies, null rate) from the data.
+
+```bash
+datagenic profile ./samples -o config.json                 # ./samples/<table>.parquet|.csv per table
+datagenic profile ./samples -o config.json --emit-ir ir.json   # also dump the synthesised IR for review
+datagenic profile ./samples -o config.json --infer-semantics values  # + finance generators from values
+datagenic generate-data config.json
+```
+
+```python
+from datagenic import build_config, Generator
+
+config, ir = build_config(
+    {"customers": customers_df, "orders": orders_df},   # frames or paths; or a directory string
+    output_folder_path="./out", number_of_batches=1,
+)
+Generator(data_generator_config_file=config).generate()
+```
+
+What it fits per column: dtype → IR type; all-distinct int/string → a **key**;
+value-set ⊆ another table's key → a **foreign key** (nullable if it has nulls);
+low-cardinality → `list_of_values` + observed `probabilities`; high-cardinality →
+`cardinality`; float → `mu`/`sigma`; null fraction → `null_spec.rate`. Per-table
+row counts are taken from the sample so regenerated volume matches.
+
+The IR is **synthesised internally** (the engine is IR-driven) and only surfaced
+with `--emit-ir` — from your side it's just *files in, `config.json` out*. Key/FK
+detection is heuristic: review the emitted IR (or `config.json`) and hand-edit
+anything it guessed wrong.
+
+---
+
 ## Domain-aware scaffolding: financial-markets generators + automatic inference
 
 By default a `string` column scaffolds to `prefix_N`-style values. For a recognised

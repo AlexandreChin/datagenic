@@ -90,6 +90,9 @@ too: the storage layer validates via the parquet footer without downloading the 
 - `semantics.py` / `semantics_agent.py` — scaffold-time semantic inference that maps columns to
   domain generators (no IR hand-tagging): `heuristic` / `values` inferrers (dependency-free) and
   the opt-in LLM `agent` (`[agent]` extra, lazy `anthropic`). See `config.md`.
+- `profiling.py` — profile-from-sample scaffolding (`build_config`, CLI `profile`): reads sample
+  files, synthesises an IR (keys, FK candidates) and fits generator args (cardinality, mu/sigma,
+  value frequencies, null rate), then scaffolds via `Configs`. The IR is internal/optional.
 - `postprocessors.py` — the two built-ins the scaffolder wires: `TemplatePostProcessor`
   (no-op hook to copy) and `KeyEnforcer` (FK / key-alignment).
 - `protocols.py` — runtime-checkable `Protocol` contracts (generators, post-processors) checked

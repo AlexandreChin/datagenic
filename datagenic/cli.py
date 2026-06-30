@@ -1,6 +1,7 @@
 """datagenic CLI — generation only.
 
-Commands: generate-data, generate-data-config, check-distributable.
+Commands: generate-data, generate-data-config, profile, review-config,
+check-distributable.
 """
 
 import argparse
@@ -127,6 +128,51 @@ def main():
     )
     review_parser.add_argument("config", help="Path to generator config JSON")
 
+    # ── profile ──────────────────────────────────────────────────────────────
+    profile_parser = sub.add_parser(
+        "profile",
+        help="Scaffold a generation config from a sample of data files — no IR needed. "
+        "Infers tables/columns/keys/foreign-keys and fits generator args (cardinality, "
+        "mu/sigma, value frequencies, null rate) from the data.",
+    )
+    profile_parser.add_argument(
+        "input",
+        help="A directory of <table>.parquet/<table>.csv files, or a JSON map "
+        "{table: path} (inline or a .json file).",
+    )
+    profile_parser.add_argument("-o", "--output", required=True, help="Output config file path")
+    profile_parser.add_argument(
+        "--emit-ir", dest="emit_ir", help="Also write the synthesised IR here (for review/editing)"
+    )
+    profile_parser.add_argument(
+        "--storage-type", default="local", help="Storage type (default: local)"
+    )
+    profile_parser.add_argument(
+        "--format", default="parquet", dest="output_format", help="Output format (default: parquet)"
+    )
+    profile_parser.add_argument(
+        "--output-folder", default="samples/data_generator/output", help="Folder for generated data"
+    )
+    profile_parser.add_argument(
+        "--max-categorical",
+        type=int,
+        default=50,
+        help="Columns with at most this many distinct values are fitted as "
+        "list_of_values + probabilities; above it, only cardinality (default: 50)",
+    )
+    profile_parser.add_argument(
+        "--infer-semantics",
+        dest="infer_semantics",
+        default=None,
+        help="Also run semantic inference (heuristic|values|agent|module:function)",
+    )
+    profile_parser.add_argument(
+        "--batches", type=int, default=2, help="Number of batches (default: 2)"
+    )
+    profile_parser.add_argument("--start-date", default="2024-01-01")
+    profile_parser.add_argument("--end-date", default="2024-01-02")
+    profile_parser.add_argument("--seed", type=int, default=0)
+
     args = parser.parse_args()
 
     # ── Dispatch ───────────────────────────────────────────────────────────
@@ -231,6 +277,42 @@ def main():
                     f"  [{inferred.get('confidence', 0.0):.2f}] {table_name}.{col_name} "
                     f"-> {inferred['semantic']} (by {inferred['by']}{parent}{alts})"
                 )
+
+    elif args.command == "profile":
+        import json
+        from pathlib import Path
+
+        from datagenic import profiling
+
+        # sources: a directory path, an inline JSON map, or a .json map file
+        source = args.input
+        if source.lstrip().startswith("{"):
+            source = json.loads(source)
+        elif source.endswith(".json"):
+            with open(source) as f:
+                source = json.load(f)
+
+        config, ir = profiling.build_config(
+            source,
+            storage_type=args.storage_type,
+            output_format=args.output_format,
+            output_folder_path=args.output_folder,
+            number_of_batches=args.batches,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            seed=args.seed,
+            semantic_inferrer=args.infer_semantics,
+            max_categorical=args.max_categorical,
+        )
+        out = Path(args.output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(config, indent=4))
+        print(f"config file for data generation available here:{args.output}")
+        if args.emit_ir:
+            ir_path = Path(args.emit_ir)
+            ir_path.parent.mkdir(parents=True, exist_ok=True)
+            ir_path.write_text(json.dumps(ir, indent=4))
+            print(f"synthesised IR available here:{args.emit_ir}")
 
 
 if __name__ == "__main__":

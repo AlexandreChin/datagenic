@@ -11,6 +11,7 @@ Their homes:
   - ``Configs`` / ``Columns``  → ``datagenic.scaffolding``
   - ``Generator``             → ``datagenic.engine``
   - ``GraphDependencies``     → ``datagenic.dependency_graph``
+  - ``build_config``          → ``datagenic.profiling`` (scaffold a config from sample files)
 """
 
 _LAZY = {
@@ -18,6 +19,7 @@ _LAZY = {
     "Columns": "datagenic.scaffolding",
     "Generator": "datagenic.engine",
     "GraphDependencies": "datagenic.dependency_graph",
+    "build_config": "datagenic.profiling",
 }
 
 __all__ = list(_LAZY)

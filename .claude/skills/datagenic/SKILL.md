@@ -42,6 +42,7 @@ Read the relevant reference(s) before responding. For broad tasks, read all of t
 ```bash
 datagenic generate-data-config samples/ir/solutions_ir.json -o config.json --output-folder ./out
 datagenic generate-data-config ir.json -o config.json --infer-semantics heuristic  # auto-detect domain columns (heuristic|values|agent|module:function)
+datagenic profile ./samples -o config.json           # scaffold a config from sample files (no IR): infers keys/FKs, fits generator args
 datagenic review-config config.json                  # list inferred columns (lowest confidence first)
 datagenic generate-data config.json                  # sequential
 datagenic generate-data config.json --parallel 8     # all local cores (byte-identical)
@@ -50,6 +51,6 @@ datagenic generate-data config.json --tables orders  # a "job": orders + its ups
 datagenic check-distributable config.json            # prove sharding is byte-safe
 ```
 
-**Public API** (lazily re-exported from `datagenic`): `Configs`, `Columns` (scaffolding), `Generator` (engine), `GraphDependencies` (dependency graph). A bare `import datagenic` stays cheap — it pulls in no polars/pandas/cloud SDK. Domain generators live in `datagenic.generators_finance` and the scaffold-time semantic inference in `datagenic.semantics` (+ the opt-in LLM `datagenic.semantics_agent`, `[agent]` extra) — see `references/config.md`.
+**Public API** (lazily re-exported from `datagenic`): `Configs`, `Columns` (scaffolding), `Generator` (engine), `GraphDependencies` (dependency graph). A bare `import datagenic` stays cheap — it pulls in no polars/pandas/cloud SDK. Domain generators live in `datagenic.generators_finance` and the scaffold-time semantic inference in `datagenic.semantics` (+ the opt-in LLM `datagenic.semantics_agent`, `[agent]` extra). Profile-from-sample scaffolding (`build_config`, CLI `profile`) lives in `datagenic.profiling`. See `references/config.md`.
 
 **Requires Python ≥ 3.12.** Polars is the working frame type in the engine; pandas is accepted at boundaries and normalised.
