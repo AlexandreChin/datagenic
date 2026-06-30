@@ -69,4 +69,55 @@ def test_data_generator_graph_html(tmp_path):
     assert len(table_ys) == len(set(table_ys)), "each table must be on its own row"
 
 
+def test_table_relations_contracts_through_internals(tmp_path):
+    """'Tables only' lineage: FK / intermediate chains collapse to direct dumped-table
+    edges; an un-dumped intermediate is passed through, never an endpoint."""
+    config = {
+        "default_parameters": {"postprocessor_args": {"_input_tables": []}},
+        "tables": [
+            {
+                "table_name": "products",
+                "dump_results": True,
+                "columns": [{"column_name": "sku", "column_generator": {"args": {}}}],
+                "post_processor": None,
+            },
+            {
+                "table_name": "staging",  # un-dumped intermediate
+                "dump_results": False,
+                "columns": [],
+                "post_processor": {
+                    "udf_module": "m",
+                    "udf_name": "u",
+                    "udf_args": {"_input_tables": ["products"]},
+                },
+            },
+            {
+                "table_name": "orders",
+                "dump_results": True,
+                "columns": [],
+                "post_processor": {
+                    "udf_module": "m",
+                    "udf_name": "u",
+                    "udf_args": {"_input_tables": ["staging"]},
+                },
+            },
+        ],
+    }
+    path = tmp_path / "cfg.json"
+    path.write_text(json.dumps(config))
+    gd = GraphDependencies(str(path))
+
+    rels = {(r["source"], r["target"]) for r in gd.table_relations()}
+    # products feeds orders through an intermediate + a post-processor -> one direct edge
+    assert ("products", "orders") in rels
+    # the un-dumped intermediate is contracted away — never a relation endpoint
+    assert all("staging" not in pair for pair in rels)
+
+    # contracted edges are emitted (hidden) and the toggle ships in the HTML
+    els = gd._cytoscape_elements()
+    assert any(e["data"].get("kind") == "rel" for e in els)
+    gd.dump_html(folder_path=str(tmp_path))
+    assert "Tables only: off" in (tmp_path / "data_generator_dependencies.html").read_text()
+
+
 test_data_generator_post_processor()

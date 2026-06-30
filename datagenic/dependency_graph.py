@@ -138,18 +138,21 @@ class GraphDependencies:
         return list(self._nodes.values())
 
     # ── chronological ordering ───────────────────────────────────────────────
-    def _topological_order(self) -> list:
-        """Node ids in dependency order, stable by insertion order (Kahn's algo).
-
-        Used by the HTML 'Chronological' layout: each node gets its own column, so
-        no two nodes share a vertical line and reading left-to-right walks the DAG.
+    @staticmethod
+    def _kahn(ids: list, edges: list) -> list:
+        """Topological order of ``ids`` over ``edges``, stable by the order of ``ids``
+        (Kahn's algorithm). Edges with an endpoint outside ``ids`` are ignored, so the
+        same routine serves both the full graph and the contracted table-only graph.
         """
-        ids = list(self._nodes)
+        ids = list(ids)
+        idset = set(ids)
         adjacency: dict = {i: [] for i in ids}
         indegree: dict = {i: 0 for i in ids}
-        for edge in self.edges:
-            adjacency[edge["source"]].append(edge["target"])
-            indegree[edge["target"]] += 1
+        for edge in edges:
+            source, target = edge["source"], edge["target"]
+            if source in idset and target in idset:
+                adjacency[source].append(target)
+                indegree[target] += 1
 
         order: list = []
         placed: set = set()
@@ -164,6 +167,45 @@ class GraphDependencies:
             for tgt in adjacency[nxt]:
                 indegree[tgt] -= 1
         return order
+
+    def _topological_order(self) -> list:
+        """Node ids in dependency order. Used by the HTML 'Chronological' layout: each
+        node gets its own column, so no two share a vertical line and reading
+        left-to-right walks the DAG.
+        """
+        return self._kahn(list(self._nodes), self.edges)
+
+    def table_relations(self) -> list:
+        """Direct table->table edges, contracting every non-table node.
+
+        Only *dumped* tables (type ``table``) are endpoints; intermediate, temp,
+        generator, post-processor and file nodes are passed through — so an FK wired
+        ``source -> post-processor`` (or chained via an un-dumped intermediate) becomes a
+        single ``source -> consumer`` edge. Powers the HTML 'Tables only' view.
+        """
+        is_table = {n["id"]: n["type"] == "table" for n in self.nodes}
+        succ: dict = {}
+        for edge in self.edges:
+            succ.setdefault(edge["source"], []).append(edge["target"])
+
+        rels: list = []
+        seen_pairs: set = set()
+        for start in (n["id"] for n in self.nodes if is_table[n["id"]]):
+            seen: set = set()
+            stack = list(succ.get(start, []))
+            while stack:
+                node_id = stack.pop()
+                if node_id in seen:
+                    continue
+                seen.add(node_id)
+                if is_table.get(node_id):  # reached another dumped table — record, stop
+                    pair = (start, node_id)
+                    if start != node_id and pair not in seen_pairs:
+                        seen_pairs.add(pair)
+                        rels.append({"source": start, "target": node_id})
+                else:  # pipeline internal / intermediate — contract through it
+                    stack.extend(succ.get(node_id, []))
+        return rels
 
     # ── mermaid (static) ──────────────────────────────────────────────────────
     def _mermaid_node(self, node: dict) -> str:
@@ -270,6 +312,14 @@ class GraphDependencies:
                 if target in py:
                     py[node["id"]] = py[target]
 
+        # contracted table-only graph: its own chronological ranks (tx/ty) so the
+        # 'Tables only' view can reuse the diagonal preset layout.
+        rels = self.table_relations()
+        table_ids = [n["id"] for n in self.nodes if n["type"] == "table"]
+        trank = {nid: i for i, nid in enumerate(self._kahn(table_ids, rels))}
+        tx = {nid: trank[nid] * 260 for nid in table_ids}
+        ty = {nid: trank[nid] * 120 for nid in table_ids}
+
         elements: list = []
         for node in self.nodes:
             emoji = _NODE_STYLE[node["type"]][3]
@@ -282,17 +332,40 @@ class GraphDependencies:
                     "data": {
                         "id": nid,
                         "type": node["type"],
+                        # 'table' = dumped table (kept in the Tables-only view); everything
+                        # else is pipeline 'detail' (hidden there).
+                        "kind": "table" if node["type"] == "table" else "detail",
                         "display": display,
                         "rank": rank[nid],
                         "px": px[nid],
                         "py": py[nid],
+                        "tx": tx.get(nid, px[nid]),
+                        "ty": ty.get(nid, py[nid]),
                     },
                     "position": {"x": px[nid], "y": py[nid]},
                 }
             )
         for n, edge in enumerate(self.edges):
             elements.append(
-                {"data": {"id": f"e{n}", "source": edge["source"], "target": edge["target"]}}
+                {
+                    "data": {
+                        "id": f"e{n}",
+                        "source": edge["source"],
+                        "target": edge["target"],
+                        "kind": "detail",
+                    }
+                }
+            )
+        for n, edge in enumerate(rels):  # contracted table->table edges, hidden by default
+            elements.append(
+                {
+                    "data": {
+                        "id": f"r{n}",
+                        "source": edge["source"],
+                        "target": edge["target"],
+                        "kind": "rel",
+                    }
+                }
             )
         return elements
 
@@ -301,8 +374,10 @@ class GraphDependencies:
 
         A toolbar toggles between **Chronological** (topological order, one node per
         column — nothing shares a vertical line) and **Compact** (dagre layered)
-        layouts, plus fit, per-type filters, search, and click-to-highlight a node's
-        upstream/downstream dependencies. Self-contained except for the CDN libraries.
+        layouts, a **Tables only** view (pipeline internals hidden, lineage shown as
+        contracted table->table edges), plus fit, per-type filters, search, and
+        click-to-highlight a node's upstream dependencies. Self-contained except for
+        the CDN libraries.
         """
         html_file_path = f"{folder_path}/data_generator_dependencies.html"
         Path(folder_path).mkdir(parents=True, exist_ok=True)
@@ -335,6 +410,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
 <div id="bar">
   <strong>Data Generator Workflow</strong>
   <button id="layout">Layout: Chronological</button>
+  <button id="tablesOnly">Tables only: off</button>
   <button id="fit">Fit</button>
   <input id="search" placeholder="search nodes…">
   <span id="filters"></span>
@@ -369,6 +445,8 @@ const cy = cytoscape({
         'target-arrow-shape': 'triangle', 'curve-style': 'unbundled-bezier' } },
     { selector: '.faded', style: { 'opacity': 0.12 } },
     { selector: '.hl', style: { 'line-color': '#0ea5e9', 'target-arrow-color': '#0ea5e9', 'width': 3 } },
+    { selector: 'edge[kind = "rel"]', style: { 'display': 'none', 'line-color': '#16a34a',
+        'target-arrow-color': '#16a34a', 'width': 2.5 } },
   ],
 });
 const layouts = {
@@ -376,12 +454,16 @@ const layouts = {
   // unique y, so no two nodes share a column or a row (unconnected nodes are never
   // on the same line). Deterministic (positions derived from rank), so toggling back
   // always restores it.
+  // in 'Tables only' the contracted table ranks (tx/ty) drive the diagonal preset.
   chrono:  { name: 'preset', fit: true, padding: 40,
-             positions: (n) => ({ x: n.data('px'), y: n.data('py') }) },
+             positions: (n) => tablesOnly ? ({ x: n.data('tx'), y: n.data('ty') })
+                                           : ({ x: n.data('px'), y: n.data('py') }) },
   compact: { name: 'dagre', rankDir: 'LR', nodeSep: 25, rankSep: 70, edgeSep: 10, fit: true, padding: 40 },
 };
 let mode = 'chrono';
-const runLayout = () => cy.layout(layouts[mode]).run();
+let tablesOnly = false;
+// lay out only what's visible, so hidden pipeline nodes never leave gaps
+const runLayout = () => cy.layout({ ...layouts[mode], eles: cy.elements(':visible') }).run();
 runLayout();
 document.getElementById('layout').onclick = (e) => {
   mode = mode === 'chrono' ? 'compact' : 'chrono';
@@ -412,9 +494,31 @@ const filters = document.getElementById('filters');
   l.innerHTML = '<input type="checkbox" checked data-t="' + t + '"> ' + t;
   filters.appendChild(l);
 });
-filters.onchange = (e) => {
-  const t = e.target.dataset.t;
-  cy.nodes('[type = "' + t + '"]').style('display', e.target.checked ? 'element' : 'none');
+const applyFilters = () => filters.querySelectorAll('input').forEach((cb) => {
+  cy.nodes('[type = "' + cb.dataset.t + '"]').style('display', cb.checked ? 'element' : 'none');
+});
+filters.onchange = applyFilters;
+
+// 'Tables only': hide pipeline internals + show contracted table->table lineage edges.
+function applyTablesOnly() {
+  cy.batch(() => {
+    if (tablesOnly) {
+      cy.elements('[kind = "detail"]').style('display', 'none');
+      cy.nodes('[kind = "table"]').style('display', 'element');
+      cy.edges('[kind = "rel"]').style('display', 'element');
+    } else {
+      cy.edges('[kind = "rel"]').style('display', 'none');
+      cy.edges('[kind = "detail"]').style('display', 'element');
+      applyFilters();  // restore node visibility, honouring the per-type checkboxes
+    }
+  });
+  filters.querySelectorAll('input').forEach((cb) => { cb.disabled = tablesOnly; });
+}
+document.getElementById('tablesOnly').onclick = (e) => {
+  tablesOnly = !tablesOnly;
+  e.target.textContent = 'Tables only: ' + (tablesOnly ? 'on' : 'off');
+  applyTablesOnly();
+  runLayout();
 };
 </script></body></html>
 """
