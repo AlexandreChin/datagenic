@@ -1,51 +1,108 @@
 # datagenic
 
-> **A fully self-hosted, versatile and scalable synthetic data generation package.**
+> **A lightweight, versatile & scalable synthetic-data generation package.**
+> Describe your tables once — generate plausible, reproducible data, on a laptop or a cluster.
 
-## Why datagenic
+Generating data *right* is hard in four ways at once. datagenic is built around solving all four:
 
-- **Zero-config to fully custom** — scaffold a complete config straight from your schema with sensible defaults (no setup when realism doesn't matter), then plug in your own UDFs to encode arbitrary business rules and fine-tune the data when it does.
-- **Scales without a rewrite** — go from one core to all of them to a cluster with a flag, never a code change; sharded output is byte-identical to a single run.
-- **Reproducible to the byte** — same seed + config → identical output, every run. A failing test means your code changed, not your fixtures.
-- **Resumable** — every file embeds a content hash, so a re-run skips what's done and picks up where it stopped — locally _and_ in the cloud.
-- **Consistent in every dimension** — consistency is enforced *within a table* (unique keys, valid row-level relationships), *across tables* (foreign keys drawn from their reference pools), and *across time* (values evolve consistently date to date, keys stay stable) — not random noise.
-- **Streaming writes** — large partitions stream to disk or cloud as they're produced, keeping peak memory bounded even for huge tables.
-- **Lightweight core** — `import datagenic` pulls in no cloud SDK; backends load only when you use them.
-
-## When to use datagenic (and when not)
-
-datagenic generates **plausible, structure-driven data from a schema you describe** — not realistic data *learned* from a real dataset. Where it fits, and where another tool is the better call:
-
-| Main criterion | Best choice(s) |
+| The challenge | How datagenic answers it |
 | --- | --- |
-| Multi-dimensional consistency — within a table, across tables (FKs), and **over time** | **datagenic** · [SDV](https://github.com/sdv-dev/SDV) (within/cross-table) |
-| Byte-for-byte reproducibility — same seed/config → identical output | **datagenic** |
-| Fully custom generation logic — your own code and rules | **datagenic** (UDFs) · [Faker](https://github.com/joke2k/faker) (field-level) |
-| Scale to billions of rows | **datagenic** · [dbldatagen](https://github.com/databrickslabs/dbldatagen) |
-| Distributed **without** Spark (master-free) | **datagenic** |
-| Distributed **on** Spark / Databricks | dbldatagen |
-| Resumable / checkpointed large runs | **datagenic** |
-| No source data required — generate from a schema | **datagenic** · dbldatagen · Faker · [Mimesis](https://github.com/lk-geimfari/mimesis) · [Mockaroo](https://www.mockaroo.com/) |
-| Statistical fidelity learned from real data | SDV · Gretel · MOSTLY AI · YData |
-| Privacy / de-identification — differential privacy, masking | Gretel · MOSTLY AI · Tonic |
-| Self-hosted — data never leaves your environment | **datagenic** · SDV · dbldatagen · Faker · Mimesis |
-| Hosted — zero infra to run | Mockaroo · Gretel · MOSTLY AI |
-| Quick single-table mock data, minimal setup | Faker · Mimesis · Mockaroo |
-| Edge-case **test inputs** to probe code (not bulk datasets) | [Hypothesis](https://github.com/HypothesisWorks/hypothesis) |
+| **Realistic data** — real data follows rules (derived, conditional, correlated); fakers only emit canned values | One click scaffolds **quite-realistic** data — then **fine-tune for full realism** (Claude can help) |
+| **Multi-dimensional consistency** — must hold *within a table*, *across tables*, and *over time*, all at once | Unique **within a table**, valid **across tables**, coherent **over time** — from one seed |
+| **Agile logic** — you must iterate without breaking consistency or what already worked | Iterate freely; built-in checks **guarantee you didn't break** earlier results |
+| **Scale** — a few rows for a test, or billions for a perf run — usually two different tools | **One flag** — 100 rows to a billion, one core to a cluster, **identical at every size** |
 
-In short: **datagenic** for reproducible, consistent, custom data at scale; a field-level faker for a few throwaway rows; an ML/privacy tool when fidelity to real data is the point.
+`import datagenic` pulls in no cloud SDK; backends load only when you use them.
+
+---
+
+## 1 · Realistic data — scaffold in one click, fine-tune for full realism
+
+Point datagenic at a schema (or a folder of sample files) and it scaffolds a complete,
+runnable config with sensible defaults for every column. Where realism matters, refine a
+column or plug in your own logic — the scaffold gets you most of the way, you tune the rest.
+
+- **No schema? Start from data.** `datagenic profile ./samples -o config.json` reads your
+  files and *writes the config for you* — it infers tables, keys & foreign keys, and fits
+  value mixes, distributions and null rates. You never hand-author a schema.
+- **Domain packs, automatically.** For financial markets, datagenic detects columns **by
+  name, sample values, or an LLM** (`--infer-semantics heuristic|values|agent`) and wires
+  realistic generators — no tagging:
+  - **coherent taxonomy** — `asset class → instrument → risk factor` always line up (Rates → IR Swap → IR Curve, never a mismatch)
+  - **valid identifiers** — ISIN / CUSIP / SEDOL with real check digits (they pass validators, unique per run)
+  - **realistic quantities** — a `notional` comes out lognormal in the millions and **scaled by asset class** (an Equity notional ≈ \$100k, a Rates notional ≈ tens of millions), a `pnl` array becomes a per-row **time series**
+  - **market dimensions** — currencies, tenors, ratings, GICS sectors, counterparties, books & desks
+- **Accuracy ladder.** `heuristic` gives a plausible guess, `values`/`profile` **fit the
+  distributions from your real sample**, `agent` covers the long tail — every pick annotated
+  for review (`datagenic review-config`) and fully hand-editable.
+
+A scaffolded `trades` table generates rows like:
+
+| asset class | instrument | isin | ccy | tenor | notional |
+| --- | --- | --- | --- | --- | ---: |
+| Rates | IR Swap | DE000A1B2C39 | EUR | 5Y | 1,024,300 |
+| Credit | CDS | US12L4F8K2H7 | USD | 3M | 512,750 |
+| Equity | Equity Option | GB00BH4HKS39 | GBP | 1Y | 88,400 |
+| FX | FX Forward | FR0000131104 | USD | 1M | 2,310,000 |
+
+Coherent taxonomy, valid identifiers, plausible values — **generated, not canned**.
+
+## 2 · Consistency — in every dimension
+
+datagenic enforces consistency where other generators emit independent noise:
+
+- **within a table** — unique keys, valid row-level relationships (a coherent `(asset_class, instrument_type)` pair)
+- **across tables** — foreign keys drawn from their reference pools, so `trades.join(instruments, on="isin")` never drops a row
+- **over time** — values evolve coherently date to date (the same trade's price is a walk, not re-rolled daily) and keys stay stable
+
+All from one seed. datagenic also renders the **lineage** — how every table connects — straight from your config, as a static diagram or an interactive graph.
+
+## 3 · Agile logic — iterate without breaking what worked
+
+Because output is **byte-deterministic** (same seed + config → identical bytes, every run),
+a golden test is a real diff:
+
+```text
+$ pytest tests/golden
+  ✗ orders changed            # exactly where you edited the logic
+  ✓ everything else identical  # nothing drifted on its own
+```
+
+A red test means *your logic changed*, not a flake. `validate()` and `check-distributable`
+catch breakage before a long run. **Claude knows datagenic** — it ships a skill, so you can
+describe a change and refine the logic together.
+
+## 4 · Scale — one config, laptop to cluster
+
+Go from a laptop fixture to a billion rows with runtime flags, never a code change:
+
+```bash
+datagenic generate-data config.json                   # run A · laptop, sequential
+datagenic generate-data config.json --shard 3 --of 8  # run B · one worker of a cluster
+# → byte-identical output; sharding is master-free, no Spark
+```
+
+1000× the data is **one number** (`"number_of_rows": 1_000 → 1_000_000_000`), same logic.
+Large partitions stream to disk or cloud as they're produced, so peak memory stays bounded;
+every file embeds a content hash, so an interrupted or extended run **resumes where it
+stopped** — locally *and* in the cloud.
+
+---
 
 ## Workflow
 
-_Describe once → scaffold → (optionally customize) → generate anywhere._ The config is the single source of truth; scale and storage are runtime flags, not changes to your setup. In the graph below, 🟨 **amber** steps need your input, 🟩 **green** steps are click-and-run — the fast path is one amber box, then all green.
+_Describe once → scaffold → (refine ⇄ generate) → anywhere._ The config is the single source
+of truth; scale and storage are runtime flags, not changes to your setup. In the graph below,
+🟨 **amber** steps need your input, 🟩 **green** steps are click-and-run — the fast path is one
+amber box, then all green.
 
 ```mermaid
 flowchart TD
-    A["📝 Describe tables<br/>IR — your only input"]:::cfg --> B["⚙️ Scaffold config<br/>generate-data-config"]:::run
+    A["📝 Describe tables<br/>IR — or profile from sample files"]:::cfg --> B["⚙️ Scaffold config<br/>generate-data-config"]:::run
     B --> C{"Need realism<br/>or scale-out?"}:::dec
 
     C -- "No · run it" --> G
-    C -- "Yes · customize" --> D["✏️ Tune config<br/>ranges, cardinality"]:::cfg
+    C -- "Yes · refine" --> D["✏️ Tune config<br/>ranges, cardinality, semantics"]:::cfg
     D --> E["🧩 Add your UDFs<br/>business rules"]:::cfg
     E --> F["✅ check-distributable<br/>confirm splitting won't change the data"]:::run
     F --> G
@@ -71,8 +128,9 @@ flowchart TD
 With `uv` (add to your project):
 
 ```bash
-uv add datagenic            # core (local generation)
-uv add "datagenic[cloud]"   # + Azure Blob / S3 / SFTP storage backends
+uv add datagenic                 # core (local generation)
+uv add "datagenic[cloud]"        # + Azure Blob / S3 / SFTP storage backends
+uv add "datagenic[cloud,agent]"  # + the anthropic SDK for --infer-semantics agent
 ```
 
 Or with `pip`:
@@ -111,8 +169,12 @@ Or from the CLI:
 
 ```bash
 datagenic generate-data-config samples/ir/solutions_ir.json -o config.json --output-folder ./out
+datagenic generate-data-config ir.json -o config.json --infer-semantics heuristic  # auto-detect domain columns
+datagenic profile ./samples -o config.json          # scaffold straight from sample files (no schema)
+datagenic review-config config.json                 # list inferred columns to fine-tune
+
 datagenic generate-data config.json                 # sequential
-datagenic generate-data config.json --parallel 8    # all local cores
+datagenic generate-data config.json --parallel 8    # all local cores (byte-identical to sequential)
 datagenic generate-data config.json --shard 1 --of 8  # one worker of a distributed run
 datagenic generate-data config.json --tables orders  # a "job": only this table + its upstream closure
 datagenic check-distributable config.json           # confirm splitting won't change the data
@@ -120,12 +182,40 @@ datagenic check-distributable config.json           # confirm splitting won't ch
 
 > The `datagenic` command is the console script installed with the package. In a dev checkout, run the same commands with `uv run python -m datagenic.cli …`.
 
+## When to use datagenic (and when not)
+
+datagenic generates **plausible, structure-driven data from a schema you describe** — not
+realistic data *learned* from a real dataset. Where it fits, and where another tool is the
+better call:
+
+| Main criterion | Best choice(s) |
+| --- | --- |
+| Multi-dimensional consistency — within a table, across tables (FKs), and **over time** | **datagenic** · [SDV](https://github.com/sdv-dev/SDV) (within/cross-table) |
+| Byte-for-byte reproducibility — same seed/config → identical output | **datagenic** |
+| Fully custom generation logic — your own code and rules | **datagenic** (UDFs) · [Faker](https://github.com/joke2k/faker) (field-level) |
+| Scale to billions of rows | **datagenic** · [dbldatagen](https://github.com/databrickslabs/dbldatagen) |
+| Distributed **without** Spark (master-free) | **datagenic** |
+| Distributed **on** Spark / Databricks | dbldatagen |
+| Resumable / checkpointed large runs | **datagenic** |
+| No source data required — generate from a schema | **datagenic** · dbldatagen · Faker · [Mimesis](https://github.com/lk-geimfari/mimesis) · [Mockaroo](https://www.mockaroo.com/) |
+| Statistical fidelity learned from real data | SDV · Gretel · MOSTLY AI · YData |
+| Privacy / de-identification — differential privacy, masking | Gretel · MOSTLY AI · Tonic |
+| Self-hosted — data never leaves your environment | **datagenic** · SDV · dbldatagen · Faker · Mimesis |
+| Hosted — zero infra to run | Mockaroo · Gretel · MOSTLY AI |
+| Quick single-table mock data, minimal setup | Faker · Mimesis · Mockaroo |
+| Edge-case **test inputs** to probe code (not bulk datasets) | [Hypothesis](https://github.com/HypothesisWorks/hypothesis) |
+
+In short: **datagenic** for reproducible, consistent, custom data at scale; a field-level
+faker for a few throwaway rows; an ML/privacy tool when fidelity to real data is the point.
+
 ## The IR, and scaffolding from any schema
 
 The **internal representation (IR)** is the native input — a flat
 `{name, tables:[{type, name, keys, columns:[{name, type}]}]}`. To scaffold from a
 different schema, pass `adaptor=fn` where `fn(source) -> IR` — a small one-time mapper
-that turns your source format into the IR.
+that turns your source format into the IR. (Profiling from sample files synthesises the IR
+for you — the user experience is "files in, config out"; the IR stays an internal contract,
+optionally surfaced for inspection.)
 
 See [`docs/`](docs/) for the full cookbooks (data generator, storage layer).
 

@@ -150,6 +150,34 @@ normal frozen config; generation determinism is unaffected.
 - Identifiers — `ISIN`/`CUSIP`/`SEDOL` (valid check digits), `InstrumentName`, `RiskFactorName`.
 - Org — `Counterparty`, `TradingBook`, `Desk`.
 
+**Numeric quantities** — inference also covers *numbers*, so a quantitative fact column is
+realistic in magnitude/shape (not the generic `N(1000, 100)`). Float columns matching a
+quantity name map to a distribution-aware generator wired with a book-agnostic prior:
+
+- Flat — `notional`, `price`, `quantity`, `rate`, `spread`, `pv`, `fx_rate` →
+  `RandomFloats`/`BrownianFloats` with `distribution` (`"lognormal"` for positive,
+  right-skewed magnitudes — `mu` is the **median in real units**, `sigma` the log-space
+  spread; `"normal"` otherwise). Priors live in `_finance_data.QUANTITY_PRIORS`.
+- Conditional — `notional` maps to the generic `ConditionalFloats`, whose per-row distribution
+  depends on a parent category (`by_column`, e.g. `asset_class`): an Equity notional ≈ $100k,
+  a Rates notional ≈ tens of millions. It reads the partial `_table` (so the parent must be
+  generated first — the scaffolder reorders it) and falls back to `default` when the parent
+  column/category is absent. The curated per-category `cases` live in
+  `_finance_data.CONDITIONAL_QUANTITY_PRIORS`. Gated to **float** columns (ints/strings are
+  never treated as quantities).
+
+The default `distribution="normal"` keeps existing float output byte-identical, so numeric
+inference is golden-neutral and opt-in like the categorical side.
+
+**Array quantities** — the same for `array(float)` columns (a per-row time series/curve).
+`RandomArrayFloats`/`BrownianArrayFloats` gained `distribution` + `path` (`"iid"` /
+`"walk"`, a cumulative per-row series). Flat `returns`/`curve` map to those; `pnl` maps to
+`ConditionalArrayFloats` (per-row array vol by `asset_class`). The column's **type** decides
+scalar vs array (`_is_float_array_type` vs the tightened `_is_float_type`): `pnl`/`float` →
+scalar signed `pnl`, `pnl`/`array(float)` → `pnl_series` — never crossing. `values`/`profile`
+fit the element family/params **and** `size_of_arrays` (`fit_array_distribution`), per-group
+when conditional; `agent` proposes them.
+
 **Inference** — `Configs(input=ir, semantic_inferrer=..., samples=...)`, or CLI
 `--infer-semantics` / `--samples`:
 
@@ -165,6 +193,14 @@ An explicit `"semantic"` on an IR column **overrides** inference. Each inferred 
 engine, surfaced by `datagenic review-config config.json` (lowest confidence first) so you can
 fine-tune. The inferrer never hand-edits the config beyond the generator choice; everything
 stays editable.
+
+**Fitting numeric distributions (accuracy ladder).** For numeric quantities the strategies form
+a ladder: `heuristic` uses the curated prior (a plausible guess); `values`/`profile` **fit** the
+distribution from the sample — `semantics.fit_distribution` picks the family and recovers params
+in the generator's units (so it round-trips), and for a conditional quantity fits a per-category
+`cases` map (`group_by` the parent, min ~30 rows/group else pooled `default`); `agent` proposes a
+family + scale (and conditioning column) for names no prior recognises. Fitted params override
+the curated prior via `build_generator(..., overrides=...)`.
 
 **Cardinality on fixed-domain categoricals.** A finance categorical has a small fixed
 vocabulary, so it declares a `cardinality()` method: the engine consults it when distributing

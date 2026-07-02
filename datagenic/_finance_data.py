@@ -238,3 +238,130 @@ DESKS = [
 
 # Country prefixes for synthetic ISINs.
 ISIN_COUNTRIES = ["US", "GB", "DE", "FR", "JP", "CH", "NL", "IT", "ES", "CA", "AU"]
+
+
+# ── Numeric quantity priors ──────────────────────────────────────────────────
+# Book-agnostic *defaults* for quantitative fact columns, so a scaffolded config
+# yields realistic magnitudes out of the box (a notional in the millions, a
+# right-skewed lognormal — not the generic N(1000, 100)). Each prior picks:
+#   generator     — "RandomFloats" (stateless: the value is fixed across dates,
+#                   e.g. a trade notional) or "BrownianFloats" (evolves over
+#                   dates via recall, e.g. a price / PV that walks).
+#   distribution  — "lognormal" (positive, right-skewed; ``mu`` is the median in
+#                   real units, ``sigma`` the log-space spread) or "normal".
+#   mu, sigma     — distribution parameters in the column's real units.
+# These are guesses (see the "accuracy ladder"): plausible, editable, and
+# annotated under ``_inferred``. For fidelity, fit them from a sample (``values``
+# inference / ``profile``). Kept pure-data here; ``semantics`` builds the
+# generator specs from them.
+QUANTITY_PRIORS: dict[str, dict] = {
+    "quantity": {
+        "generator": "RandomFloats",
+        "distribution": "lognormal",
+        "mu": 10_000.0,
+        "sigma": 1.2,
+    },
+    "price": {
+        "generator": "BrownianFloats",
+        "distribution": "lognormal",
+        "mu": 100.0,
+        "sigma": 0.4,
+    },
+    "pv": {
+        "generator": "BrownianFloats",
+        "distribution": "lognormal",
+        "mu": 50_000.0,
+        "sigma": 1.0,
+    },
+    "rate": {"generator": "RandomFloats", "distribution": "normal", "mu": 0.03, "sigma": 0.01},
+    "spread": {"generator": "RandomFloats", "distribution": "normal", "mu": 0.005, "sigma": 0.002},
+    "fx_rate": {
+        "generator": "BrownianFloats",
+        "distribution": "lognormal",
+        "mu": 1.1,
+        "sigma": 0.1,
+    },
+    # a scalar P&L / mark is signed (can be negative) -> normal, mean ~0. Distinct
+    # from `pv` (a positive lognormal exposure) and from the array `pnl_series`.
+    "pnl": {"generator": "RandomFloats", "distribution": "normal", "mu": 0.0, "sigma": 50_000.0},
+}
+
+
+# ── Array-typed quantity priors ──────────────────────────────────────────────
+# Book-agnostic defaults for array/vector fact columns (a per-row time series or
+# curve). Shape mirrors the array generators' args: generator +
+# {distribution, mu, sigma, size_of_arrays, path}. ``path="walk"`` makes the array
+# a cumulative per-row series (a PnL path); ``"iid"`` independent elements. Guesses
+# — fit from a sample (``values`` / ``profile``) for fidelity.
+ARRAY_QUANTITY_PRIORS: dict[str, dict] = {
+    # a daily-returns series: signed, independent daily draws.
+    "returns": {
+        "generator": "RandomArrayFloats",
+        "distribution": "normal",
+        "mu": 0.0,
+        "sigma": 0.02,
+        "size_of_arrays": 250,
+        "path": "iid",
+    },
+    # a rate/term-structure curve: small positive levels across a handful of tenors.
+    "curve": {
+        "generator": "RandomArrayFloats",
+        "distribution": "normal",
+        "mu": 0.03,
+        "sigma": 0.01,
+        "size_of_arrays": 15,
+        "path": "iid",
+    },
+}
+
+
+# ── Conditional numeric priors ───────────────────────────────────────────────
+# For quantities whose scale depends on a categorical column: the value is drawn
+# from a per-category distribution (an Equity trade notional ≈ $100k, a Rates
+# IR-swap notional ≈ tens of millions — orders of magnitude apart). The numeric
+# twin of the asset_class -> instrument_type taxonomy. Shape mirrors the
+# ``ConditionalFloats`` args (``by_column`` / ``cases`` / ``default``); ``cases``
+# medians are in real currency units. ``parent_semantic`` names the categorical
+# semantic to condition on, so inference links the right column. Book-agnostic
+# defaults — fit from a sample (``values`` / ``profile``) for fidelity.
+CONDITIONAL_QUANTITY_PRIORS: dict[str, dict] = {
+    "notional": {
+        "parent_semantic": "asset_class",
+        "by_column": "asset_class",
+        "cases": {
+            "Rates": {"distribution": "lognormal", "mu": 2.5e7, "sigma": 1.0},
+            "Credit": {"distribution": "lognormal", "mu": 5.0e6, "sigma": 1.0},
+            "Equity": {"distribution": "lognormal", "mu": 1.0e5, "sigma": 0.8},
+            "FX": {"distribution": "lognormal", "mu": 1.0e7, "sigma": 0.9},
+            "Commodity": {"distribution": "lognormal", "mu": 1.0e6, "sigma": 1.0},
+            "Inflation": {"distribution": "lognormal", "mu": 2.0e7, "sigma": 0.9},
+        },
+        "default": {"distribution": "lognormal", "mu": 1.0e6, "sigma": 1.0},
+    },
+}
+
+
+# ── Conditional array-quantity priors ────────────────────────────────────────
+# Array/vector quantities whose scale depends on a categorical column — e.g. a PnL
+# time series whose volatility depends on asset_class (a Rates book's daily PnL
+# swings wider than an Equity book's). The array twin of CONDITIONAL_QUANTITY_PRIORS.
+# Shape mirrors the ``ConditionalArrayFloats`` args: ``by_column`` / ``cases`` /
+# ``default`` (per-category {distribution, mu, sigma}) plus shared ``size_of_arrays``
+# / ``path``. Signed (normal), so a PnL path can go negative. Book-agnostic guesses.
+CONDITIONAL_ARRAY_QUANTITY_PRIORS: dict[str, dict] = {
+    "pnl_series": {
+        "parent_semantic": "asset_class",
+        "by_column": "asset_class",
+        "size_of_arrays": 250,
+        "path": "walk",
+        "cases": {
+            "Rates": {"distribution": "normal", "mu": 0.0, "sigma": 2.0e5},
+            "Credit": {"distribution": "normal", "mu": 0.0, "sigma": 8.0e4},
+            "Equity": {"distribution": "normal", "mu": 0.0, "sigma": 5.0e4},
+            "FX": {"distribution": "normal", "mu": 0.0, "sigma": 1.0e5},
+            "Commodity": {"distribution": "normal", "mu": 0.0, "sigma": 6.0e4},
+            "Inflation": {"distribution": "normal", "mu": 0.0, "sigma": 1.5e5},
+        },
+        "default": {"distribution": "normal", "mu": 0.0, "sigma": 5.0e4},
+    },
+}

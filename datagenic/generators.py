@@ -25,6 +25,61 @@ def _cardinality_range(cardinality, _batch_number, kwargs, base=0):
     return base + offset, base + offset + cardinality
 
 
+def _draw_floats(rng, n, mu, sigma, distribution):
+    """Draw ``n`` floats from the chosen distribution.
+
+    - ``"normal"`` (default) → ``N(mu, sigma)`` — the historical behaviour, byte-identical.
+    - ``"lognormal"`` → a positive, right-skewed draw whose **median is ``mu`` (real
+      units)** and whose log-space spread is ``sigma`` (a shape parameter, typically
+      ~0.3-1.5). Suited to quantities like notionals/prices that span orders of magnitude.
+    """
+    if distribution == "lognormal":
+        if mu <= 0:
+            raise ValueError(f"lognormal distribution needs mu (median) > 0, got {mu}")
+        return rng.lognormal(mean=float(np.log(mu)), sigma=sigma, size=n)
+    if distribution != "normal":
+        raise ValueError(f"unknown distribution {distribution!r}; expected 'normal' or 'lognormal'")
+    return rng.normal(loc=mu, scale=sigma, size=n)
+
+
+def _draw_float_array(rng, rows, size, mu, sigma, distribution, path):
+    """Draw ``rows`` float arrays of length ``size`` from the chosen distribution.
+
+    Routes through ``_draw_floats`` on a flat ``rows*size`` draw then reshapes —
+    byte-identical to ``rng.normal(size=(rows, size))`` for the default
+    ``distribution="normal"``, so existing array output is unchanged.
+
+    - ``path="iid"`` (default) → each element an independent draw.
+    - ``path="walk"`` → a per-row cumulative series (``cumsum`` along the array
+      axis): the elements form a time path of per-step increments, suited to a
+      PnL/returns series. (For a signed/``normal`` family this is a random walk;
+      for ``lognormal`` the positive increments make a monotone series.)
+    """
+    flat = _draw_floats(rng, rows * size, mu, sigma, distribution)
+    arr = np.asarray(flat, dtype=float).reshape(rows, size)
+    if path == "walk":
+        return np.cumsum(arr, axis=1)
+    if path != "iid":
+        raise ValueError(f"unknown path {path!r}; expected 'iid' or 'walk'")
+    return arr
+
+
+def _table_column(table, col):
+    """Read column ``col`` from the partial ``_table`` (polars or pandas frame),
+    or ``None`` if the frame/column is absent or empty. Frame-agnostic so a
+    conditional generator can read a parent column without importing polars."""
+    if table is None:
+        return None
+    columns = getattr(table, "columns", None)
+    if columns is None or col not in columns:
+        return None
+    series = table[col]
+    if len(series) == 0:
+        return None
+    to_numpy = getattr(series, "to_numpy", None)
+    return to_numpy() if to_numpy is not None else np.asarray(series)
+
+
 class SingleValues:
     def __init__(self) -> None:
         self._generator_description = "generates a unique value for the whole column"
@@ -166,13 +221,14 @@ class RandomIntegers:
 
 class RandomFloats:
     def __init__(self) -> None:
-        self._generator_description = "generates random floats from a normal distribution. You can also specify a list_of_values=[2.7182,...,3.1415] with its associated probabilities=[0.1,...,0.3]"
+        self._generator_description = "generates random floats — distribution='normal' (N(mu, sigma), default) or 'lognormal' (positive, right-skewed; mu is the median in real units, sigma the log-space spread). You can also specify a list_of_values=[2.7182,...,3.1415] with its associated probabilities=[0.1,...,0.3]"
 
     def call(
         self,
         _number_of_rows_per_batch: int,
         mu: float = 1000,
         sigma: float = 100,
+        distribution: str = "normal",
         list_of_values: list | None = None,
         probabilities: list | None = None,
         **kwargs,
@@ -181,19 +237,19 @@ class RandomFloats:
             return _rng_from(kwargs).choice(
                 list_of_values, size=_number_of_rows_per_batch, replace=True, p=probabilities
             )
-        else:
-            return _rng_from(kwargs).normal(loc=mu, scale=sigma, size=_number_of_rows_per_batch)
+        return _draw_floats(_rng_from(kwargs), _number_of_rows_per_batch, mu, sigma, distribution)
 
 
 class BrownianFloats:
     def __init__(self) -> None:
-        self._generator_description = "generates random floats from a normal distribution, and propagates the values across time by applying small shocks"
+        self._generator_description = "generates random floats (distribution='normal' default, or 'lognormal' — mu is the median in real units), and propagates the values across time by applying small shocks"
 
     def call(
         self,
         _number_of_rows_per_batch: int,
         mu: float = 1000,
         sigma: float = 100,
+        distribution: str = "normal",
         list_of_values: list | None = None,
         probabilities: list | None = None,
         **kwargs,
@@ -202,8 +258,7 @@ class BrownianFloats:
             return _rng_from(kwargs).choice(
                 list_of_values, size=_number_of_rows_per_batch, replace=True, p=probabilities
             )
-        else:
-            return _rng_from(kwargs).normal(loc=mu, scale=sigma, size=_number_of_rows_per_batch)
+        return _draw_floats(_rng_from(kwargs), _number_of_rows_per_batch, mu, sigma, distribution)
 
     def recall(self, input_array: np.ndarray, drift: float = 0, noise: float = 10, **kwargs):
         shocks = self.call(
@@ -213,6 +268,50 @@ class BrownianFloats:
             _rng=kwargs.get("_rng"),
         )
         return input_array + shocks
+
+
+class ConditionalFloats:
+    def __init__(self) -> None:
+        self._generator_description = (
+            "generates floats whose distribution depends on another column's value: "
+            "reads by_column from the partial table and, per row, draws from the "
+            "matching entry in cases={value: {distribution, mu, sigma}} (falling back "
+            "to default). E.g. a notional whose scale depends on asset_class. Falls "
+            "back to a flat draw from default when by_column is absent."
+        )
+
+    def call(
+        self,
+        _number_of_rows_per_batch: int,
+        by_column: str = "asset_class",
+        cases: dict | None = None,
+        default: dict | None = None,
+        **kwargs,
+    ):
+        rng = _rng_from(kwargs)
+        default = default or {"distribution": "normal", "mu": 1000, "sigma": 100}
+        parent = _table_column(kwargs.get("_table"), by_column)
+        if parent is None:  # parent column absent -> a single flat draw from default
+            return _draw_floats(
+                rng,
+                _number_of_rows_per_batch,
+                default["mu"],
+                default["sigma"],
+                default.get("distribution", "normal"),
+            )
+        cases = cases or {}
+        out = np.empty(_number_of_rows_per_batch, dtype=float)
+        for value in np.unique(parent):  # vectorised per distinct parent (sorted -> deterministic)
+            mask = parent == value
+            spec = cases.get(str(value), default)
+            out[mask] = _draw_floats(
+                rng,
+                int(mask.sum()),
+                spec["mu"],
+                spec["sigma"],
+                spec.get("distribution", "normal"),
+            )
+        return out
 
 
 class CurrentAsofDates:
@@ -343,7 +442,11 @@ class RandomTimeStamps:
 
 class RandomArrayFloats:
     def __init__(self) -> None:
-        self._generator_description = "generates random array of floats from a normal distribution"
+        self._generator_description = (
+            "generates a fixed-size array of floats per row — distribution='normal' "
+            "(default) or 'lognormal' (mu=median, sigma=log-σ); path='iid' (independent "
+            "elements, default) or 'walk' (a cumulative per-row series, e.g. a PnL path)"
+        )
 
     def call(
         self,
@@ -351,18 +454,28 @@ class RandomArrayFloats:
         _number_of_rows_per_batch: int,
         mu: float = 1000,
         sigma: float = 100,
+        distribution: str = "normal",
+        path: str = "iid",
         **kwargs,
     ):
-        return (
-            _rng_from(kwargs)
-            .normal(mu, sigma, size=(_number_of_rows_per_batch, size_of_arrays))
-            .tolist()
-        )
+        return _draw_float_array(
+            _rng_from(kwargs),
+            _number_of_rows_per_batch,
+            size_of_arrays,
+            mu,
+            sigma,
+            distribution,
+            path,
+        ).tolist()
 
 
 class BrownianArrayFloats:
     def __init__(self) -> None:
-        self._generator_description = "generates random array of floats from a normal distribution, and propagates the values across time"
+        self._generator_description = (
+            "generates a fixed-size array of floats per row (distribution='normal' default "
+            "or 'lognormal'; path='iid' default or 'walk'), and propagates the values across "
+            "dates by applying small shocks"
+        )
 
     def call(
         self,
@@ -370,13 +483,19 @@ class BrownianArrayFloats:
         _number_of_rows_per_batch: int,
         mu: float = 1000,
         sigma: float = 100,
+        distribution: str = "normal",
+        path: str = "iid",
         **kwargs,
     ):
-        return (
-            _rng_from(kwargs)
-            .normal(mu, sigma, size=(_number_of_rows_per_batch, size_of_arrays))
-            .tolist()
-        )
+        return _draw_float_array(
+            _rng_from(kwargs),
+            _number_of_rows_per_batch,
+            size_of_arrays,
+            mu,
+            sigma,
+            distribution,
+            path,
+        ).tolist()
 
     def recall(
         self,
@@ -395,6 +514,57 @@ class BrownianArrayFloats:
             _rng=kwargs.get("_rng"),
         )
         return np.sum([input_array.tolist(), shocks], axis=0).tolist()
+
+
+class ConditionalArrayFloats:
+    def __init__(self) -> None:
+        self._generator_description = (
+            "generates a fixed-size float array per row whose distribution depends on "
+            "another column's value: reads by_column from the partial table and, per row, "
+            "draws an array from the matching entry in cases={value: {distribution, mu, "
+            "sigma}} (falling back to default). size_of_arrays and path are shared across "
+            "cases. E.g. a PnL series whose volatility depends on asset_class. Falls back "
+            "to a flat draw from default when by_column is absent."
+        )
+
+    def call(
+        self,
+        size_of_arrays: int,
+        _number_of_rows_per_batch: int,
+        by_column: str = "asset_class",
+        cases: dict | None = None,
+        default: dict | None = None,
+        path: str = "iid",
+        **kwargs,
+    ):
+        rng = _rng_from(kwargs)
+        default = default or {"distribution": "normal", "mu": 0, "sigma": 1}
+        parent = _table_column(kwargs.get("_table"), by_column)
+        if parent is None:  # parent column absent -> a single flat draw from default
+            return _draw_float_array(
+                rng,
+                _number_of_rows_per_batch,
+                size_of_arrays,
+                default["mu"],
+                default["sigma"],
+                default.get("distribution", "normal"),
+                path,
+            ).tolist()
+        cases = cases or {}
+        out = np.empty((_number_of_rows_per_batch, size_of_arrays), dtype=float)
+        for value in np.unique(parent):  # sorted -> deterministic
+            mask = parent == value
+            spec = cases.get(str(value), default)
+            out[mask] = _draw_float_array(
+                rng,
+                int(mask.sum()),
+                size_of_arrays,
+                spec["mu"],
+                spec["sigma"],
+                spec.get("distribution", "normal"),
+                path,
+            )
+        return out.tolist()
 
 
 class RandomMultivariateArrayFloats:

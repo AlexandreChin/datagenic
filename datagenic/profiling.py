@@ -14,7 +14,8 @@ What is fitted per column:
   - value-set ⊆ another table's key    → a foreign-key candidate (nullable if it has nulls)
   - low-cardinality categorical        → list_of_values + observed probabilities
   - high-cardinality discrete          → cardinality
-  - float                              → mu / sigma (normal fit)
+  - float                              → distribution + mu / sigma (lognormal if positive
+                                         & wide-spread, else normal)
   - null fraction                      → null_spec.rate (non-key) / FK null_rate
 """
 
@@ -23,6 +24,7 @@ import os
 import polars as pl
 
 from datagenic.scaffolding import Configs
+from datagenic.semantics import fit_array_distribution, fit_distribution
 
 _MAX_CATEGORICAL = 50
 _INT_DTYPES = {
@@ -47,6 +49,8 @@ def _ir_type(dtype) -> str:
         return "date"
     if isinstance(dtype, pl.Datetime):
         return "datetime"
+    if isinstance(dtype, pl.List):  # array column -> array(<inner ir type>)
+        return f"array({_ir_type(dtype.inner)})"
     return "string"
 
 
@@ -77,13 +81,20 @@ def _profile_column(series, n, max_categorical):
         override["null_rate"] = round(null_count / n, 4)
 
     non_null = series.drop_nulls()
-    distinct = non_null.n_unique()
     args: dict = {}
     if ir_type == "float":
-        if len(non_null):
-            args["mu"] = round(float(non_null.mean()), 6)
-            args["sigma"] = round(float(non_null.std()) if len(non_null) > 1 else 0.0, 6)
+        # family-aware fit: lognormal for positive, wide-spread columns (median +
+        # log-σ), else normal (mean/std) — parameterised to match the generator.
+        fitted = fit_distribution(non_null.to_list()) if len(non_null) else None
+        if fitted:
+            args = fitted
+    elif ir_type == "array(float)":
+        # fit the per-element family/params + the array length from the sample.
+        fitted = fit_array_distribution(non_null.to_list()) if len(non_null) else None
+        if fitted:
+            args = fitted
     elif ir_type in ("int", "string", "date"):
+        distinct = non_null.n_unique()
         if 0 < distinct <= max_categorical:
             args = _categorical_args(non_null)
         elif distinct:
@@ -122,7 +133,9 @@ def profile_frames(frames: dict, *, max_categorical: int = _MAX_CATEGORICAL):
     ir_tables, overrides_by_table = [], {}
     for name, (df, columns, keys, col_ov) in per.items():
         foreign_keys = []
-        for col in [c["name"] for c in columns]:
+        # array/list columns can't be a foreign key and their values are unhashable
+        scalar_cols = [c["name"] for c in columns if not c["type"].startswith("array(")]
+        for col in scalar_cols:
             if col in keys:
                 continue
             values = set(df[col].drop_nulls().to_list())
@@ -170,7 +183,14 @@ def _apply_overrides(config: dict, overrides_by_table: dict) -> None:
             if not o or col.get("is_unicity_key"):
                 continue
             if o.get("args"):
-                col["column_generator"]["args"].update(o["args"])
+                # Update only keys the wired generator actually accepts. For an
+                # inferred column this drops incompatible profiled args (e.g. a flat
+                # mu/sigma against a ConditionalFloats already fitted by inference)
+                # while still applying compatible ones (list_of_values on a categorical).
+                gen_args = col["column_generator"]["args"]
+                for key, value in o["args"].items():
+                    if key in gen_args:
+                        gen_args[key] = value
             if o.get("null_rate") is not None:
                 col["null_spec"] = {"rate": o["null_rate"]}
 

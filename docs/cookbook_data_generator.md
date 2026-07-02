@@ -214,6 +214,52 @@ automatically, **without hand-tagging the IR**.
 These are ordinary generators referenced by string in the config, so you can also wire
 one by hand (`"udf_module": "datagenic.generators_finance", "udf_name": "Currency"`).
 
+### Realistic numeric quantities (flat and conditional)
+
+Inference covers **numbers**, not just categoricals — so a quantitative fact column comes
+out with a plausible magnitude and shape instead of the generic `N(1000, 100)`. Float
+columns whose name matches a quantity (`notional`, `price`, `quantity`, `rate`, `spread`,
+`pv`, `fx_rate`) are wired to a distribution-aware generator with a book-agnostic prior:
+
+- **Distribution** — `RandomFloats`/`BrownianFloats` gained a `distribution` arg:
+  `"lognormal"` (positive, right-skewed; `mu` is the **median in real units**, `sigma` the
+  log-space spread — for magnitudes like notionals/prices) or `"normal"` (the default,
+  byte-identical to before — for rates/spreads). Use `BrownianFloats` for a value that
+  evolves over dates (a price), `RandomFloats` for one fixed across dates (a notional).
+- **Conditional** — a `notional` maps to `ConditionalFloats`, whose per-row distribution
+  depends on the row's category. It reads a parent column (`by_column`, e.g. `asset_class`)
+  from the partial row and draws from the matching `cases` entry, so an **Equity** notional
+  comes out ≈ \$100k while a **Rates** notional ≈ tens of millions — orders of magnitude
+  apart, coherent with the asset class. The parent must be generated first (the scaffolder
+  reorders it); with no parent column it falls back to a flat `default`.
+
+```jsonc
+// scaffolded notional (asset_class present in the table)
+{"col_name": "notional",
+ "column_generator": {
+   "udf_module": "datagenic.generators", "udf_name": "ConditionalFloats",
+   "args": {"by_column": "asset_class",
+            "cases": {"Equity": {"distribution": "lognormal", "mu": 1e5, "sigma": 0.8},
+                      "Rates":  {"distribution": "lognormal", "mu": 2.5e7, "sigma": 1.0}},
+            "default": {"distribution": "lognormal", "mu": 1e6, "sigma": 1.0}}},
+ "_inferred": {"semantic": "notional", "parent": "asset_class", "by": "heuristic"}}
+```
+
+Numeric inference is gated by **type** (an int id or a string label is never treated as a
+quantity) and, because the default distribution is `normal`, it leaves existing float
+output byte-identical — golden-neutral and opt-in like the categorical side.
+
+**Array-typed quantities (e.g. a PnL time series).** The same applies to `array(float)`
+columns — a per-row vector/series. `RandomArrayFloats`/`BrownianArrayFloats` gained the
+`distribution` arg plus `path` (`"iid"` independent elements, or `"walk"` — a cumulative
+per-row series, e.g. a PnL path). A `pnl` array column maps to `ConditionalArrayFloats`,
+whose per-row array volatility depends on `asset_class` (a Rates book's PnL path swings
+wider than an Equity book's); `returns`/`curve` map to flat array generators. The column's
+**type decides scalar vs array** — `pnl` as `float` is a signed scalar, `pnl` as
+`array(float)` is a `pnl_series` — so the same name never cross-wires. `profile`/`values`
+fit the element family/params *and* the array length from a sample; `agent` proposes them
+(plus `size_of_arrays`).
+
 ### Let the scaffolder detect them
 
 Pass `semantic_inferrer=` to `Configs` (or `--infer-semantics` on the CLI). Three
@@ -221,9 +267,13 @@ strategies:
 
 | Strategy | Basis | Needs |
 |---|---|---|
-| `heuristic` | column-name patterns (`ccy`→currency, `isin`→isin, `asset_class`→asset_class, `tenor`→tenor, …) | nothing |
-| `values` | real sample values (ISO-4217 membership, ISIN/CUSIP/SEDOL checksum, taxonomy vocab); falls back to names when no sample | `samples=` |
-| `agent` | an LLM (Claude) for ambiguous columns | `pip install 'datagenic[agent]'` + `ANTHROPIC_API_KEY` |
+| `heuristic` | column-name patterns (`ccy`→currency, `isin`→isin, `asset_class`→asset_class, `notional`→notional, …); numeric quantities use the curated prior | nothing |
+| `values` | real sample values (ISO-4217 membership, ISIN/CUSIP/SEDOL checksum, taxonomy vocab); **fits** numeric distributions (family + params, per-category `cases`) from the sample; falls back to names when no sample | `samples=` |
+| `agent` | an LLM (Claude) for ambiguous columns; also proposes a numeric family + scale (and conditioning column) | `pip install 'datagenic[agent]'` + `ANTHROPIC_API_KEY` |
+
+The numeric strategies form an accuracy ladder: `heuristic` = a plausible curated guess,
+`values`/`profile` = **fitted from your data** (the authoritative path), `agent` = the long
+tail with no curated prior.
 
 ```python
 from datagenic import Configs
@@ -590,8 +640,12 @@ Ensures FK columns in the fact table draw values exclusively from the referenced
 | `RandomStrings`             | string        | Random `{prefix}{n}` with configurable cardinality            |
 | `RandomDates`               | date          | Random dates from an optional fixed list                      |
 | `RandomTimeStamps`          | datetime      | Random timestamps                                             |
-| `BrownianFloats`            | float         | Normal distribution with Brownian shocks across time          |
-| `BrownianArrayFloats`       | array(float)  | Same, returning a fixed-size array per row                    |
+| `RandomFloats`              | float         | `distribution="normal"` (default) or `"lognormal"` (`mu`=median, `sigma`=log-σ); fixed across dates |
+| `BrownianFloats`            | float         | Same `distribution` families, propagated across time with Brownian shocks (`recall`) |
+| `ConditionalFloats`         | float         | Per-row distribution keyed on a parent column (`by_column`/`cases`/`default`) — e.g. notional by asset class |
+| `RandomArrayFloats`         | array(float)  | Fixed-size float array per row; `distribution` + `path="iid"`/`"walk"` (a cumulative per-row series) |
+| `BrownianArrayFloats`       | array(float)  | Same, plus propagated across dates with Brownian shocks (`recall`) |
+| `ConditionalArrayFloats`    | array(float)  | Per-row array whose distribution is keyed on a parent column — e.g. a PnL series's vol by asset class |
 | `RandomArrayStrings`        | array(string) | Random string arrays with configurable cardinality            |
 | `IncrementalArrayDates`     | array(date)   | Arrays of incrementally spaced dates                          |
 | `CurrentAsofDates`          | date          | Always the current batch date (used for the `Date` column)    |

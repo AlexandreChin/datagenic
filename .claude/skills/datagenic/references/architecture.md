@@ -82,14 +82,20 @@ too: the storage layer validates via the parquet footer without downloading the 
   `_Journal` (append-only JSONL run log + derived `generation_summary.json`).
 - `generators.py` — the column-generator library (`RandomFloats`, `BrownianFloats`,
   `UniqueIncrementalStrings`, array/timestamp/multivariate, …). Each is a class with `call()`
-  and optionally `recall()` / `cardinality()`.
+  and optionally `recall()` / `cardinality()`. Scalar and array floats take `distribution`
+  (`"normal"` default / `"lognormal"`); array floats also take `path` (`"iid"` / `"walk"`).
+  `ConditionalFloats` / `ConditionalArrayFloats` draw per-row from a per-category distribution
+  keyed on a parent column read from the partial `_table`.
 - `generators_finance.py` — financial-markets domain generators (coherent asset-class →
   instrument → risk-factor hierarchy, currency/tenor/rating/sector, ISIN/CUSIP/SEDOL with valid
   check digits, counterparty/book/desk); fixed-vocabulary ones declare `cardinality()`.
-  Vocabularies in `_finance_data.py`.
+  Vocabularies + numeric priors (`QUANTITY_PRIORS`, `CONDITIONAL_QUANTITY_PRIORS`) in `_finance_data.py`.
 - `semantics.py` / `semantics_agent.py` — scaffold-time semantic inference that maps columns to
-  domain generators (no IR hand-tagging): `heuristic` / `values` inferrers (dependency-free) and
-  the opt-in LLM `agent` (`[agent]` extra, lazy `anthropic`). See `config.md`.
+  domain generators, categorical **and** numeric (scalar + array; no IR hand-tagging):
+  `heuristic` / `values` inferrers (dependency-free; type-gated string/float/array(float);
+  `values` fits distributions — element params + array length — via `fit_distribution` /
+  `fit_array_distribution`) and the opt-in LLM `agent` (`[agent]` extra, lazy `anthropic`).
+  See `config.md`.
 - `profiling.py` — profile-from-sample scaffolding (`build_config`, CLI `profile`): reads sample
   files, synthesises an IR (keys, FK candidates) and fits generator args (cardinality, mu/sigma,
   value frequencies, null rate), then scaffolds via `Configs`. The IR is internal/optional.

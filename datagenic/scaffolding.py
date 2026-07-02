@@ -731,7 +731,7 @@ class Configs:
         rec = self._semantics.get((table_name, temp_col["col_name"]))
         if not rec:
             return
-        cg = build_generator(rec["semantic"], rec.get("parent"))
+        cg = build_generator(rec["semantic"], rec.get("parent"), rec.get("args"))
         cg["description"] = (
             f"inferred semantic '{rec['semantic']}' "
             f"(confidence {rec['confidence']:.2f}, by {rec['by']})"
