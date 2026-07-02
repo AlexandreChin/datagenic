@@ -184,29 +184,17 @@ datagenic check-distributable config.json           # confirm splitting won't ch
 
 ## When to use datagenic (and when not)
 
-datagenic generates **plausible, structure-driven data from a schema you describe** — not
-realistic data *learned* from a real dataset. Where it fits, and where another tool is the
-better call:
+datagenic generates **plausible, structure-driven data from a schema you describe** — it's
+*not* learning a distribution from a real dataset. Pick by what you need:
 
-| Main criterion | Best choice(s) |
+| If you need… | Reach for |
 | --- | --- |
-| Multi-dimensional consistency — within a table, across tables (FKs), and **over time** | **datagenic** · [SDV](https://github.com/sdv-dev/SDV) (within/cross-table) |
-| Byte-for-byte reproducibility — same seed/config → identical output | **datagenic** |
-| Fully custom generation logic — your own code and rules | **datagenic** (UDFs) · [Faker](https://github.com/joke2k/faker) (field-level) |
-| Scale to billions of rows | **datagenic** · [dbldatagen](https://github.com/databrickslabs/dbldatagen) |
-| Distributed **without** Spark (master-free) | **datagenic** |
-| Distributed **on** Spark / Databricks | dbldatagen |
-| Resumable / checkpointed large runs | **datagenic** |
-| No source data required — generate from a schema | **datagenic** · dbldatagen · Faker · [Mimesis](https://github.com/lk-geimfari/mimesis) · [Mockaroo](https://www.mockaroo.com/) |
-| Statistical fidelity learned from real data | SDV · Gretel · MOSTLY AI · YData |
-| Privacy / de-identification — differential privacy, masking | Gretel · MOSTLY AI · Tonic |
-| Self-hosted — data never leaves your environment | **datagenic** · SDV · dbldatagen · Faker · Mimesis |
-| Hosted — zero infra to run | Mockaroo · Gretel · MOSTLY AI |
-| Quick single-table mock data, minimal setup | Faker · Mimesis · Mockaroo |
-| Edge-case **test inputs** to probe code (not bulk datasets) | [Hypothesis](https://github.com/HypothesisWorks/hypothesis) |
-
-In short: **datagenic** for reproducible, consistent, custom data at scale; a field-level
-faker for a few throwaway rows; an ML/privacy tool when fidelity to real data is the point.
+| Reproducible, consistent, custom data **at scale** — from a schema, master-free, self-hosted | **datagenic** |
+| Statistical fidelity **learned from real data** | [SDV](https://github.com/sdv-dev/SDV) · Gretel · MOSTLY AI |
+| Privacy / de-identification (differential privacy, masking) | Gretel · Tonic · MOSTLY AI |
+| Rich field-level fakes (names, addresses, emails) with **zero config**, or a few throwaway rows | [Faker](https://github.com/joke2k/faker) · [Mimesis](https://github.com/lk-geimfari/mimesis) · [Mockaroo](https://www.mockaroo.com/) |
+| Generation **native to Spark / Databricks** | [dbldatagen](https://github.com/databrickslabs/dbldatagen) |
+| Edge-case **test inputs** to probe code (not bulk data) | [Hypothesis](https://github.com/HypothesisWorks/hypothesis) |
 
 ## The IR, and scaffolding from any schema
 
