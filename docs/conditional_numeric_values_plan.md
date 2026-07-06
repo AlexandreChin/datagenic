@@ -53,7 +53,7 @@ per-quantity time behaviour via the existing `recall` split: a `notional` is **f
 across dates (stateless, no `recall` → values persist), a `price`/`pv` **evolves**
 (Brownian `recall`).
 
-### 2. A conditional (parent-aware) numeric generator (`generators_finance.py`)
+### 2. A conditional (parent-aware) numeric generator (`market_finance/generators.py`)
 
 `ConditionalFloats` (or a finance `Notional`) — the numeric twin of
 `FinancialInstrumentType`:
@@ -71,7 +71,7 @@ Per row it reads `_table[by_column]` and draws from the matching case on `_rng`
 (vectorised per distinct category, like `_sample_by_parent`). Falls back to `default`
 when the parent column is absent or a category is unmapped.
 
-### 3. Quantity priors (`datagenic/_finance_data.py`)
+### 3. Quantity priors (`datagenic/market_finance/_data.py`)
 
 Pure-data tables of plausible defaults:
 
@@ -157,10 +157,10 @@ is annotated under `_inferred` for `review-config`, so guesses are visible and e
 1. ✅ **Distribution-aware float generator** (`distribution=`) + tests; golden-neutral
    (default normal). `RandomFloats`/`BrownianFloats` gained `distribution="normal"|
    "lognormal"`; `_draw_floats` helper.
-2. ✅ **Flat quantity priors** (`_finance_data.QUANTITY_PRIORS`) + numeric entries in
+2. ✅ **Flat quantity priors** (`market_finance._data.QUANTITY_PRIORS`) + numeric entries in
    `SEMANTIC_GENERATORS` / `build_generator` + float-gated heuristic numeric patterns.
 3. ✅ **`ConditionalFloats`** (generic, in `generators.py`) + conditional priors keyed by
-   `asset_class` (`_finance_data.CONDITIONAL_QUANTITY_PRIORS`); heuristic links `notional`
+   `asset_class` (`market_finance._data.CONDITIONAL_QUANTITY_PRIORS`); heuristic links `notional`
    → the asset-class column. `notional` maps to `ConditionalFloats` whose `default` case
    is the flat prior, so a standalone notional stays realistic.
 4. ✅ **`values` per-group fit** — `semantics.fit_distribution` (family detection +

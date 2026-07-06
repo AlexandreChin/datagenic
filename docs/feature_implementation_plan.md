@@ -365,10 +365,10 @@ its `asset_class`, and a `risk_factor_group` must align with both.
 
 ### Module layout
 
-- `datagenic/_finance_data.py` — the curated vocabularies and the parent→children
+- `datagenic/market_finance/_data.py` — the curated vocabularies and the parent→children
   maps (pure data, numpy-only, cheap import).
-- `datagenic/generators_finance.py` — the generator classes (referenced in config
-  as `"udf_module": "datagenic.generators_finance"`). Same contract as
+- `datagenic/market_finance/generators.py` — the generator classes (referenced in config
+  as `"udf_module": "datagenic.market_finance.generators"`). Same contract as
   `generators.py`: `__init__` sets `_generator_description`; `call(self,
   _number_of_rows_per_batch, ..., **kwargs)`; randomness via `_rng_from(kwargs)`.
 
@@ -450,7 +450,7 @@ each group from `_rng`) so the cost is O(distinct asset classes), not O(rows).
 
 The user does **not** annotate the IR. During `generate-data-config` the
 scaffolder *infers* each column's finance semantic automatically, wires the
-matching `datagenic.generators_finance` generator, and annotates the choice so
+matching `datagenic.market_finance.generators` generator, and annotates the choice so
 the user can review and hand-edit the result. Scaffolding is not covered by the
 byte-identical invariant (only *generation* is), so fuzzy/LLM inference is safe
 here: once the config is frozen and reviewed, generation stays deterministic.
@@ -502,7 +502,7 @@ override every guess. Each auto-selected column carries its existing
 ```jsonc
 { "col_name": "instrument_type", "col_type": "string", "is_unicity_key": false,
   "column_generator": {
-    "udf_module": "datagenic.generators_finance",
+    "udf_module": "datagenic.market_finance.generators",
     "udf_name": "FinancialInstrumentType",
     "args": { "asset_class_column": "asset_class" },
     "description": "inferred semantic 'instrument_type' (confidence 0.88)"

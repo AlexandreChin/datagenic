@@ -10,7 +10,7 @@ absent or the category unmapped.
 import numpy as np
 import polars as pl
 
-import datagenic._finance_data as fd
+import datagenic.market_finance._data as fd
 from datagenic import Configs, Generator
 from datagenic.generators import ConditionalArrayFloats
 from datagenic.semantics import SEMANTIC_GENERATORS, build_generator, heuristic_inferrer

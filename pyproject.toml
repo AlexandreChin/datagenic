@@ -48,6 +48,9 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["datagenic*", "postprocessors_udfs*"]
 
+[tool.setuptools.package-data]
+"datagenic.market_finance" = ["data/counterparties/*.csv"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

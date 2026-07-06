@@ -11,8 +11,8 @@ mathematically too small to reach the requested row count.
 import numpy as np
 import polars as pl
 
-import datagenic._finance_data as fd
-import datagenic.generators_finance as gf
+import datagenic.market_finance._data as fd
+import datagenic.market_finance.generators as gf
 from datagenic import Configs, Generator
 
 # ── declare + honor cardinality (unit) ────────────────────────────────────────

@@ -66,7 +66,7 @@ and, per row, draws an array from the matching `cases` entry
 (`{value: {distribution, mu, sigma, size_of_arrays}}`), falling back to `default`. Same
 vectorised-per-distinct-parent, `_rng`-only, batch-local pattern (shard-safe).
 
-### 3. Array quantity priors (`datagenic/_finance_data.py`)
+### 3. Array quantity priors (`datagenic/market_finance/_data.py`)
 
 `ARRAY_QUANTITY_PRIORS` (flat) and `CONDITIONAL_ARRAY_QUANTITY_PRIORS` (keyed by parent
 category), shaped like the generator args — `{distribution, mu, sigma, size_of_arrays,

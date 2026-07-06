@@ -86,10 +86,10 @@ too: the storage layer validates via the parquet footer without downloading the 
   (`"normal"` default / `"lognormal"`); array floats also take `path` (`"iid"` / `"walk"`).
   `ConditionalFloats` / `ConditionalArrayFloats` draw per-row from a per-category distribution
   keyed on a parent column read from the partial `_table`.
-- `generators_finance.py` — financial-markets domain generators (coherent asset-class →
+- `market_finance/generators.py` — financial-markets domain generators (coherent asset-class →
   instrument → risk-factor hierarchy, currency/tenor/rating/sector, ISIN/CUSIP/SEDOL with valid
   check digits, counterparty/book/desk); fixed-vocabulary ones declare `cardinality()`.
-  Vocabularies + numeric priors (`QUANTITY_PRIORS`, `CONDITIONAL_QUANTITY_PRIORS`) in `_finance_data.py`.
+  Vocabularies + numeric priors (`QUANTITY_PRIORS`, `CONDITIONAL_QUANTITY_PRIORS`) in `market_finance/_data.py`.
 - `semantics.py` / `semantics_agent.py` — scaffold-time semantic inference that maps columns to
   domain generators, categorical **and** numeric (scalar + array; no IR hand-tagging):
   `heuristic` / `values` inferrers (dependency-free; type-gated string/float/array(float);

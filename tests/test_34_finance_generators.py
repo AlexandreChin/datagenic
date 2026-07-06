@@ -20,8 +20,8 @@ import numpy as np
 import polars as pl
 import pytest
 
-import datagenic._finance_data as fd
-import datagenic.generators_finance as gf
+import datagenic.market_finance._data as fd
+import datagenic.market_finance.generators as gf
 from datagenic import Configs, Generator
 from datagenic.semantics import heuristic_inferrer
 
@@ -182,7 +182,7 @@ def test_scaffold_with_inference_wires_finance_generators():
     cols = {c["col_name"]: c for c in table["columns"]}
 
     ac_gen = cols["asset_class"]["column_generator"]
-    assert ac_gen["udf_module"] == "datagenic.generators_finance"
+    assert ac_gen["udf_module"] == "datagenic.market_finance.generators"
     assert ac_gen["udf_name"] == "FinancialAssetClass"
     # default call() args are introspected, same as for the built-in generators
     assert set(ac_gen["args"]) == {"list_of_values", "probabilities"}
@@ -252,7 +252,7 @@ def test_bare_import_does_not_pull_finance_or_numpy():
     code = (
         "import datagenic, sys; "
         "print(any(m in sys.modules for m in "
-        "('datagenic.generators_finance', 'datagenic._finance_data', 'numpy')))"
+        "('datagenic.market_finance.generators', 'datagenic.market_finance._data', 'numpy')))"
     )
     result = subprocess.run(
         [sys.executable, "-c", code], cwd=REPO_ROOT, capture_output=True, text=True

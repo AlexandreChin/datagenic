@@ -51,6 +51,6 @@ datagenic generate-data config.json --tables orders  # a "job": orders + its ups
 datagenic check-distributable config.json            # prove sharding is byte-safe
 ```
 
-**Public API** (lazily re-exported from `datagenic`): `Configs`, `Columns` (scaffolding), `Generator` (engine), `GraphDependencies` (dependency graph). A bare `import datagenic` stays cheap — it pulls in no polars/pandas/cloud SDK. Domain generators live in `datagenic.generators_finance` and the scaffold-time semantic inference in `datagenic.semantics` (+ the opt-in LLM `datagenic.semantics_agent`, `[agent]` extra). Profile-from-sample scaffolding (`build_config`, CLI `profile`) lives in `datagenic.profiling`. See `references/config.md`.
+**Public API** (lazily re-exported from `datagenic`): `Configs`, `Columns` (scaffolding), `Generator` (engine), `GraphDependencies` (dependency graph). A bare `import datagenic` stays cheap — it pulls in no polars/pandas/cloud SDK. Domain generators live in `datagenic.market_finance.generators` and the scaffold-time semantic inference in `datagenic.semantics` (+ the opt-in LLM `datagenic.semantics_agent`, `[agent]` extra). Profile-from-sample scaffolding (`build_config`, CLI `profile`) lives in `datagenic.profiling`. See `references/config.md`.
 
 **Requires Python ≥ 3.12.** Polars is the working frame type in the engine; pandas is accepted at boundaries and normalised.

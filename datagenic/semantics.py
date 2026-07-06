@@ -25,7 +25,7 @@ anthropic SDK, lazy-imported only when invoked).
 import importlib
 import re
 
-from datagenic._finance_data import (  # pure data, no third-party imports
+from datagenic.market_finance._data import (  # pure data, no third-party imports
     ARRAY_QUANTITY_PRIORS,
     CONDITIONAL_ARRAY_QUANTITY_PRIORS,
     CONDITIONAL_QUANTITY_PRIORS,
@@ -34,32 +34,85 @@ from datagenic._finance_data import (  # pure data, no third-party imports
 
 # semantic -> (udf_module, udf_class, base_args, parent_arg_name | None)
 SEMANTIC_GENERATORS: dict[str, tuple[str, str, dict, str | None]] = {
-    "asset_class": ("datagenic.generators_finance", "FinancialAssetClass", {}, None),
+    "asset_class": ("datagenic.market_finance.generators", "FinancialAssetClass", {}, None),
     "instrument_type": (
-        "datagenic.generators_finance",
+        "datagenic.market_finance.generators",
         "FinancialInstrumentType",
         {},
         "asset_class_column",
     ),
     "risk_factor_group": (
-        "datagenic.generators_finance",
+        "datagenic.market_finance.generators",
         "FinancialRiskFactorGroup",
         {},
         "asset_class_column",
     ),
-    "currency": ("datagenic.generators_finance", "Currency", {}, None),
-    "currency_pair": ("datagenic.generators_finance", "CurrencyPair", {}, None),
-    "tenor": ("datagenic.generators_finance", "Tenor", {}, None),
-    "credit_rating": ("datagenic.generators_finance", "CreditRating", {}, None),
-    "gics_sector": ("datagenic.generators_finance", "GICSSector", {}, None),
-    "isin": ("datagenic.generators_finance", "ISIN", {}, None),
-    "cusip": ("datagenic.generators_finance", "CUSIP", {}, None),
-    "sedol": ("datagenic.generators_finance", "SEDOL", {}, None),
-    "instrument_name": ("datagenic.generators_finance", "InstrumentName", {}, None),
-    "risk_factor_name": ("datagenic.generators_finance", "RiskFactorName", {}, None),
-    "counterparty": ("datagenic.generators_finance", "Counterparty", {}, None),
-    "trading_book": ("datagenic.generators_finance", "TradingBook", {}, None),
-    "desk": ("datagenic.generators_finance", "Desk", {}, None),
+    "currency": ("datagenic.market_finance.generators", "Currency", {}, None),
+    "currency_pair": ("datagenic.market_finance.generators", "CurrencyPair", {}, None),
+    "tenor": ("datagenic.market_finance.generators", "Tenor", {}, None),
+    "credit_rating": ("datagenic.market_finance.generators", "CreditRating", {}, None),
+    "gics_sector": ("datagenic.market_finance.generators", "GICSSector", {}, None),
+    "isin": ("datagenic.market_finance.generators", "ISIN", {}, None),
+    "cusip": ("datagenic.market_finance.generators", "CUSIP", {}, None),
+    "sedol": ("datagenic.market_finance.generators", "SEDOL", {}, None),
+    "instrument_name": ("datagenic.market_finance.generators", "InstrumentName", {}, None),
+    "risk_factor_name": ("datagenic.market_finance.generators", "RiskFactorName", {}, None),
+    "counterparty": ("datagenic.market_finance.generators", "Counterparty", {}, None),
+    "counterparty_sector": (
+        "datagenic.market_finance.generators",
+        "CounterpartySector",
+        {},
+        "counterparty_column",
+    ),
+    "counterparty_country": (
+        "datagenic.market_finance.generators",
+        "CounterpartyCountry",
+        {},
+        "counterparty_column",
+    ),
+    "counterparty_ticker": (
+        "datagenic.market_finance.generators",
+        "CounterpartyTicker",
+        {},
+        "counterparty_column",
+    ),
+    "counterparty_lei": (
+        "datagenic.market_finance.generators",
+        "CounterpartyLEI",
+        {},
+        "counterparty_column",
+    ),
+    "trading_book": ("datagenic.market_finance.generators", "TradingBook", {}, None),
+    "desk": ("datagenic.market_finance.generators", "Desk", {}, None),
+    # trade attributes (fixed-vocabulary categoricals)
+    "side": ("datagenic.market_finance.generators", "Side", {}, None),
+    "option_type": ("datagenic.market_finance.generators", "OptionType", {}, None),
+    "exercise_style": ("datagenic.market_finance.generators", "ExerciseStyle", {}, None),
+    "payment_frequency": ("datagenic.market_finance.generators", "PaymentFrequency", {}, None),
+    "day_count_convention": ("datagenic.market_finance.generators", "DayCountConvention", {}, None),
+    "trade_status": ("datagenic.market_finance.generators", "TradeStatus", {}, None),
+    "exchange": ("datagenic.market_finance.generators", "Exchange", {}, None),
+    "clearing_house": (
+        "datagenic.market_finance.generators",
+        "ClearingHouse",
+        {},
+        "asset_class_column",
+    ),
+    "underlying": ("datagenic.market_finance.generators", "Underlying", {}, "asset_class_column"),
+    # coherent dates
+    "trade_date": ("datagenic.market_finance.generators", "TradeDate", {}, None),
+    "maturity_date": (
+        "datagenic.market_finance.generators",
+        "MaturityDate",
+        {},
+        "trade_date_column",
+    ),
+    "settlement_date": (
+        "datagenic.market_finance.generators",
+        "SettlementDate",
+        {},
+        "trade_date_column",
+    ),
 }
 
 # Numeric quantity semantics: a distribution-aware float generator wired with a
@@ -108,8 +161,19 @@ for _semantic, _prior in CONDITIONAL_ARRAY_QUANTITY_PRIORS.items():
         "by_column",
     )
 
-# Semantics whose generator is made coherent by reading a parent column.
-_HIERARCHY_CHILDREN = ("instrument_type", "risk_factor_group")
+# Categorical semantics made coherent by reading the asset_class column.
+_HIERARCHY_CHILDREN = ("instrument_type", "risk_factor_group", "clearing_house", "underlying")
+
+# Counterparty attributes that must stay coherent with the row's counterparty column.
+_COUNTERPARTY_CHILDREN = (
+    "counterparty_sector",
+    "counterparty_country",
+    "counterparty_ticker",
+    "counterparty_lei",
+)
+
+# Dates derived from the row's trade_date (maturity = trade_date + tenor; settlement = +lag).
+_TRADE_DATE_CHILDREN = ("maturity_date", "settlement_date")
 
 # Conditional (scalar or array) numeric semantics that condition on the asset_class
 # column, linked to it the same way the categorical hierarchy children are.
@@ -132,10 +196,26 @@ _PATTERNS: list[tuple[str, str, float]] = [
     (r"instrument[_ ]?name|security[_ ]?name|instr[_ ]?name", "instrument_name", 0.85),
     (r"asset[_ ]?class|assetclass|asset[_ ]?cls", "asset_class", 0.9),
     (r"credit[_ ]?rating|^rating$|\brating\b", "credit_rating", 0.8),
+    # counterparty attributes — tested before both the generic `sector` pattern and the
+    # plain `counterparty` pattern (which would otherwise swallow "counterparty_sector").
+    (r"(counterparty|cpty|ctp)[_ ]?sector", "counterparty_sector", 0.9),
+    (r"(counterparty|cpty|ctp)[_ ]?(country|domicile|nationality)", "counterparty_country", 0.9),
+    (r"(counterparty|cpty|ctp)[_ ]?ticker|^ticker$|\bticker\b|symbol", "counterparty_ticker", 0.85),
+    (r"\blei\b|legal[_ ]?entity[_ ]?id", "counterparty_lei", 0.9),
     (r"gics|^sector$|\bsector\b|industry", "gics_sector", 0.75),
     (r"counterparty|^ctp$|^cpty$|legal[_ ]?entity", "counterparty", 0.8),
     (r"trading[_ ]?book|^book$|portfolio", "trading_book", 0.7),
     (r"^desk$|\bdesk\b", "desk", 0.8),
+    # trade attributes
+    (r"^side$|buy[_ ]?sell|\bdirection\b|long[_ ]?short", "side", 0.85),
+    (r"option[_ ]?type|call[_ ]?put|put[_ ]?call", "option_type", 0.85),
+    (r"exercise[_ ]?(style|type)", "exercise_style", 0.85),
+    (r"payment[_ ]?freq|coupon[_ ]?freq|pay[_ ]?freq|\bfrequency\b", "payment_frequency", 0.8),
+    (r"day[_ ]?count|daycount|\bdcc\b", "day_count_convention", 0.85),
+    (r"trade[_ ]?status|^status$|lifecycle", "trade_status", 0.8),
+    (r"clearing[_ ]?house|\bccp\b|clearer|clearing[_ ]?broker", "clearing_house", 0.85),
+    (r"exchange|\bvenue\b|\bmic\b|listing", "exchange", 0.75),
+    (r"underlying|underlier|reference[_ ]?(entity|name)", "underlying", 0.85),
     (r"tenor|maturity|^term$", "tenor", 0.8),
     (r"^ccy$|^cur$|currency|ccy[_ ]?code", "currency", 0.85),
 ]
@@ -157,6 +237,17 @@ _NUMERIC_PATTERNS: list[tuple[str, str, float]] = [
     (r"quantity|^qty$|\bsize\b|volume|shares|\bunits\b", "quantity", 0.7),
     (r"\brate\b|yield|coupon", "rate", 0.7),
     (r"\bpnl\b|profit[_ ]?and[_ ]?loss|p_and_l|p_n_l", "pnl", 0.75),
+    # option value drivers + risk measures + Greeks
+    (r"volatility|implied[_ ]?vol|\bvol\b|\biv\b", "volatility", 0.8),
+    (r"\bstrike\b|strike[_ ]?price", "strike", 0.85),
+    (r"\bspot\b|spot[_ ]?price", "spot", 0.8),
+    (r"expected[_ ]?shortfall|\bcvar\b|\bes\b", "expected_shortfall", 0.85),
+    (r"\bvar\b|value[_ ]?at[_ ]?risk", "var", 0.8),
+    (r"\bdelta\b", "delta", 0.9),
+    (r"\bgamma\b", "gamma", 0.9),
+    (r"\bvega\b", "vega", 0.9),
+    (r"\btheta\b", "theta", 0.9),
+    (r"\brho\b", "rho", 0.9),
 ]
 _NUMERIC_COMPILED = [
     (re.compile(p, re.IGNORECASE), sem, conf) for p, sem, conf in _NUMERIC_PATTERNS
@@ -170,10 +261,24 @@ _ARRAY_NUMERIC_PATTERNS: list[tuple[str, str, float]] = [
     (r"\bpnl\b|pnl[_ ]?(series|vector|path|ts)|profit[_ ]?and[_ ]?loss", "pnl_series", 0.8),
     (r"return|\brtns?\b", "returns", 0.7),
     (r"curve|term[_ ]?structure|yield[_ ]?curve", "curve", 0.75),
+    (r"sensitivit|\bdeltas\b|bucket|risk[_ ]?weights?|\bladder\b", "sensitivities", 0.8),
 ]
 _ARRAY_NUMERIC_COMPILED = [
     (re.compile(p, re.IGNORECASE), sem, conf) for p, sem, conf in _ARRAY_NUMERIC_PATTERNS
 ]
+
+# Date name patterns (specific first) -> (semantic, confidence). Gated to date/datetime
+# columns. maturity/settlement derive from trade_date (+ tenor / + lag).
+_DATE_PATTERNS: list[tuple[str, str, float]] = [
+    (r"trade[_ ]?date|booking[_ ]?date|execution[_ ]?date|deal[_ ]?date", "trade_date", 0.85),
+    (
+        r"maturity[_ ]?date|expiry[_ ]?date|expiration[_ ]?date|^maturity$|^expiry$|end[_ ]?date",
+        "maturity_date",
+        0.85,
+    ),
+    (r"settlement[_ ]?date|value[_ ]?date|settle[_ ]?date|^settlement$", "settlement_date", 0.85),
+]
+_DATE_COMPILED = [(re.compile(p, re.IGNORECASE), sem, conf) for p, sem, conf in _DATE_PATTERNS]
 
 
 def _is_string_type(col_type: str | None) -> bool:
@@ -193,39 +298,44 @@ def _is_float_type(col_type: str | None) -> bool:
     return "float" in t and "array" not in t
 
 
-def _match_name(name: str) -> tuple[str | None, float]:
-    for pattern, semantic, confidence in _COMPILED:
+def _is_date_type(col_type: str | None) -> bool:
+    """Date semantics apply to date / datetime columns."""
+    return bool(col_type) and "date" in col_type.lower()
+
+
+def _match_from(compiled, name: str) -> tuple[str | None, float]:
+    for pattern, semantic, confidence in compiled:
         if pattern.search(name):
             return semantic, confidence
     return None, 0.0
+
+
+def _match_name(name: str) -> tuple[str | None, float]:
+    return _match_from(_COMPILED, name)
 
 
 def _match_numeric_name(name: str) -> tuple[str | None, float]:
-    for pattern, semantic, confidence in _NUMERIC_COMPILED:
-        if pattern.search(name):
-            return semantic, confidence
-    return None, 0.0
+    return _match_from(_NUMERIC_COMPILED, name)
 
 
 def _match_array_numeric_name(name: str) -> tuple[str | None, float]:
-    for pattern, semantic, confidence in _ARRAY_NUMERIC_COMPILED:
-        if pattern.search(name):
-            return semantic, confidence
-    return None, 0.0
+    return _match_from(_ARRAY_NUMERIC_COMPILED, name)
 
 
 def _match_by_type(name: str, col_type: str | None) -> tuple[str | None, float]:
     """Name-based match dispatched on column type: string -> categorical/id,
-    array(float) -> array quantity, scalar float -> scalar quantity. The type
-    (never the name) decides which pattern set is consulted, so a name like "pnl"
-    resolves to the scalar or the array semantic by whether the column is a float
-    or an array(float). Other types are never matched."""
+    array(float) -> array quantity, scalar float -> scalar quantity, date/datetime ->
+    date semantics. The type (never the name) decides which pattern set is consulted,
+    so a name like "pnl" resolves to the scalar or the array semantic by whether the
+    column is a float or an array(float). Other types are never matched."""
     if _is_string_type(col_type):
-        return _match_name(name)
+        return _match_from(_COMPILED, name)
     if _is_float_array_type(col_type):
-        return _match_array_numeric_name(name)
+        return _match_from(_ARRAY_NUMERIC_COMPILED, name)
     if _is_float_type(col_type):
-        return _match_numeric_name(name)
+        return _match_from(_NUMERIC_COMPILED, name)
+    if _is_date_type(col_type):
+        return _match_from(_DATE_COMPILED, name)
     return None, 0.0
 
 
@@ -253,19 +363,26 @@ def heuristic_inferrer(table_name, columns, samples=None):
 
 
 def _link_hierarchy_parents(result: dict) -> dict:
-    """Point asset-class-dependent records at the table's asset_class column (in
-    place), so the generators read it for coherence. Covers both the categorical
-    hierarchy children (instrument_type / risk_factor_group) and conditional
-    numeric children (e.g. notional)."""
-    asset_col = next((n for n, rec in result.items() if rec["semantic"] == "asset_class"), None)
-    if asset_col is not None:
+    """Point each coherent child record at the column it must read (in place), so the
+    generator stays consistent with that parent. Covers the asset_class hierarchy
+    (categorical children instrument_type / risk_factor_group + conditional numeric
+    children like notional) and counterparty attributes (sector / country). A parent the
+    inferrer already chose (e.g. the agent conditioning notional on instrument_type) is
+    kept."""
+    links = {
+        "asset_class": _HIERARCHY_CHILDREN + _ASSET_CLASS_CONDITIONAL,
+        "counterparty": _COUNTERPARTY_CHILDREN,
+        "trade_date": _TRADE_DATE_CHILDREN,
+    }
+    for parent_semantic, children in links.items():
+        parent_col = next(
+            (n for n, rec in result.items() if rec["semantic"] == parent_semantic), None
+        )
+        if parent_col is None:
+            continue
         for rec in result.values():
-            # don't overwrite a parent the inferrer already chose (e.g. the agent
-            # conditioning a notional on instrument_type instead of asset_class).
-            if rec["semantic"] in _HIERARCHY_CHILDREN + _ASSET_CLASS_CONDITIONAL and not rec.get(
-                "parent"
-            ):
-                rec["parent"] = asset_col
+            if rec["semantic"] in children and not rec.get("parent"):
+                rec["parent"] = parent_col
     return result
 
 
@@ -275,7 +392,7 @@ def _link_hierarchy_parents(result: dict) -> dict:
 _VALUE_THRESHOLD = 0.9
 
 # Lazily built so importing this module stays dependency-free (the vocab lives in
-# _finance_data, the checksum validators in generators_finance which imports numpy).
+# market_finance._data, the checksum validators in market_finance.generators which import numpy).
 _VALUE_CLASSIFIERS = None
 
 
@@ -284,8 +401,8 @@ def _build_value_classifiers():
     takes a single string value and returns True if it looks like that semantic."""
     import re as _re
 
-    from datagenic import _finance_data as fd
-    from datagenic import generators_finance as gf
+    from datagenic.market_finance import _data as fd
+    from datagenic.market_finance import generators as gf
 
     isin_re = _re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
     cusip_re = _re.compile(r"^[A-Z0-9]{8}[0-9]$")

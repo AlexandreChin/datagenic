@@ -1,4 +1,4 @@
-"""Curated financial-markets vocabularies for ``generators_finance``.
+"""Curated financial-markets vocabularies for the ``market_finance`` generators.
 
 Pure data, no third-party imports — keeps the module cheap and lets the finance
 generators draw coherent, realistic reference values. The taxonomy is aligned to
@@ -201,26 +201,78 @@ GICS_SECTORS = [
     "Real Estate",
 ]
 
-# ── Organisation / counterparty (clearly fictional) ──────────────────────────
+# ── Organisation / counterparty ──────────────────────────────────────────────
 
-COUNTERPARTIES = [
-    "Northbridge Capital",
-    "Helvetia Partners",
-    "Meridian Securities",
-    "Aurora Investment Bank",
-    "Sterling & Roe",
-    "Castlepoint Asset Mgmt",
-    "Brightwater Markets",
-    "Pinnacle Global",
-    "Cumberland Trading",
-    "Vantage Financial",
-    "Greycliff Holdings",
-    "Halcyon Capital",
-    "Westgate Bank",
-    "Solstice Markets",
-    "Ironwood Securities",
-    "Lakeshore Partners",
-]
+# Real large-cap names + metadata, loaded from bundled per-index CSVs in
+# ``data/counterparties/`` (CAC 40, DAX 40, EURO STOXX 50, SMI, FTSE 100, S&P 500 —
+# a point-in-time snapshot of the major constituents, not a complete or current index
+# membership). Each row is ``name,sector,country`` (GICS sector, ISO-2 country); the
+# ``index`` is the file stem. Grow/refresh by editing those files. Kept as *reference
+# names* (issuers / legal entities), i.e. who a synthetic trade faces.
+
+# Fallback fictional names + metadata, used only if the bundled CSVs are unavailable
+# (e.g. a stripped install that dropped package data). All are dealer-style entities.
+_FALLBACK_COUNTERPARTY_METADATA = {
+    name: {"sector": "Financials", "country": None, "index": "fictional"}
+    for name in [
+        "Northbridge Capital",
+        "Helvetia Partners",
+        "Meridian Securities",
+        "Aurora Investment Bank",
+        "Sterling & Roe",
+        "Castlepoint Asset Mgmt",
+        "Brightwater Markets",
+        "Pinnacle Global",
+        "Cumberland Trading",
+        "Vantage Financial",
+        "Greycliff Holdings",
+        "Halcyon Capital",
+        "Westgate Bank",
+        "Solstice Markets",
+        "Ironwood Securities",
+        "Lakeshore Partners",
+    ]
+}
+
+
+def _load_counterparty_metadata() -> dict[str, dict]:
+    """Load ``{name: {sector, country, index}}`` from the bundled per-index CSVs
+    (``index`` = file stem), deduped/order-preserving across files; fall back to the
+    fictional entities if the data can't be read. stdlib only (``csv``)."""
+    import csv
+    from importlib.resources import files
+
+    metadata: dict[str, dict] = {}
+    try:
+        data_dir = files("datagenic.market_finance").joinpath("data", "counterparties")
+        for entry in sorted(data_dir.iterdir(), key=lambda p: p.name):
+            if not entry.name.endswith(".csv"):
+                continue
+            index_name = entry.name[:-4]
+            for row in csv.DictReader(entry.read_text(encoding="utf-8").splitlines()):
+                name = (row.get("name") or "").strip()
+                if not name or name in metadata:
+                    continue
+                metadata[name] = {
+                    "sector": (row.get("sector") or "").strip() or None,
+                    "country": (row.get("country") or "").strip() or None,
+                    "index": index_name,
+                }
+    except (FileNotFoundError, ModuleNotFoundError, OSError):
+        return dict(_FALLBACK_COUNTERPARTY_METADATA)
+    return metadata or dict(_FALLBACK_COUNTERPARTY_METADATA)
+
+
+# name -> {sector, country, index}; COUNTERPARTIES keeps the flat name list for the
+# Counterparty generator (draws names), while CounterpartySector / CounterpartyCountry
+# read this map to stay coherent with the row's counterparty.
+COUNTERPARTY_METADATA = _load_counterparty_metadata()
+COUNTERPARTIES = list(COUNTERPARTY_METADATA)
+
+# Distinct metadata domains (for the fallback draw when a counterparty is unknown).
+COUNTERPARTY_COUNTRIES = list(
+    dict.fromkeys(m["country"] for m in COUNTERPARTY_METADATA.values() if m["country"])
+)
 
 # Composed labels built from asset class + style + region (precomputed pools).
 TRADING_BOOKS = [
@@ -238,6 +290,46 @@ DESKS = [
 
 # Country prefixes for synthetic ISINs.
 ISIN_COUNTRIES = ["US", "GB", "DE", "FR", "JP", "CH", "NL", "IT", "ES", "CA", "AU"]
+
+
+# ── Trade attributes ─────────────────────────────────────────────────────────
+
+SIDES = ["Buy", "Sell"]
+OPTION_TYPES = ["Call", "Put"]
+EXERCISE_STYLES = ["European", "American", "Bermudan"]
+PAYMENT_FREQUENCIES = ["Annual", "Semi-Annual", "Quarterly", "Monthly", "Zero Coupon"]
+DAY_COUNT_CONVENTIONS = ["30/360", "ACT/360", "ACT/365", "ACT/ACT"]
+TRADE_STATUSES = ["New", "Amended", "Live", "Matured", "Cancelled"]
+
+# Clearing houses / CCPs valid for each asset class (coherent with asset_class,
+# like the instrument-type hierarchy). Fallback flattens to all when absent.
+CLEARING_HOUSES_BY_ASSET_CLASS = {
+    "Rates": ["LCH SwapClear", "CME", "Eurex Clearing"],
+    "Credit": ["ICE Clear Credit", "LCH CDSClear"],
+    "Equity": ["Eurex Clearing", "OCC", "ICE Clear Europe"],
+    "FX": ["CME", "LCH ForexClear"],
+    "Commodity": ["ICE Clear Europe", "CME"],
+    "Inflation": ["LCH SwapClear", "Eurex Clearing"],
+}
+ALL_CLEARING_HOUSES = list(
+    dict.fromkeys(ch for chs in CLEARING_HOUSES_BY_ASSET_CLASS.values() for ch in chs)
+)
+
+# Exchange / trading-venue MICs (ISO 10383), majors.
+EXCHANGES = [
+    "XNYS",
+    "XNAS",
+    "XLON",
+    "XPAR",
+    "XETR",
+    "XMIL",
+    "XAMS",
+    "XSWX",
+    "XTKS",
+    "XHKG",
+    "XTSE",
+    "XASX",
+]
 
 
 # ── Numeric quantity priors ──────────────────────────────────────────────────
@@ -284,6 +376,29 @@ QUANTITY_PRIORS: dict[str, dict] = {
     # a scalar P&L / mark is signed (can be negative) -> normal, mean ~0. Distinct
     # from `pv` (a positive lognormal exposure) and from the array `pnl_series`.
     "pnl": {"generator": "RandomFloats", "distribution": "normal", "mu": 0.0, "sigma": 50_000.0},
+    # option-like value drivers: positive.
+    "volatility": {
+        "generator": "RandomFloats",
+        "distribution": "lognormal",
+        "mu": 0.2,
+        "sigma": 0.4,
+    },
+    "strike": {"generator": "RandomFloats", "distribution": "lognormal", "mu": 100.0, "sigma": 0.4},
+    "spot": {"generator": "BrownianFloats", "distribution": "lognormal", "mu": 100.0, "sigma": 0.4},
+    # risk measures: positive exposures.
+    "var": {"generator": "RandomFloats", "distribution": "lognormal", "mu": 1.0e5, "sigma": 1.0},
+    "expected_shortfall": {
+        "generator": "RandomFloats",
+        "distribution": "lognormal",
+        "mu": 1.3e5,
+        "sigma": 1.0,
+    },
+    # Greeks (sensitivities): signed -> normal, mean ~0, scale by Greek.
+    "delta": {"generator": "RandomFloats", "distribution": "normal", "mu": 0.0, "sigma": 0.5},
+    "gamma": {"generator": "RandomFloats", "distribution": "normal", "mu": 0.0, "sigma": 0.05},
+    "vega": {"generator": "RandomFloats", "distribution": "normal", "mu": 0.0, "sigma": 1.0e4},
+    "theta": {"generator": "RandomFloats", "distribution": "normal", "mu": 0.0, "sigma": 1.0e3},
+    "rho": {"generator": "RandomFloats", "distribution": "normal", "mu": 0.0, "sigma": 2.0e3},
 }
 
 
@@ -310,6 +425,15 @@ ARRAY_QUANTITY_PRIORS: dict[str, dict] = {
         "mu": 0.03,
         "sigma": 0.01,
         "size_of_arrays": 15,
+        "path": "iid",
+    },
+    # a bucketed sensitivity vector (e.g. delta per tenor bucket): signed, independent.
+    "sensitivities": {
+        "generator": "RandomArrayFloats",
+        "distribution": "normal",
+        "mu": 0.0,
+        "sigma": 5.0e3,
+        "size_of_arrays": 10,
         "path": "iid",
     },
 }

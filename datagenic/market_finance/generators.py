@@ -22,9 +22,12 @@ identifiers use the same disjoint-per-batch offset trick as
 ``datagenic.generators`` so codes stay globally unique across batches/shards.
 """
 
+import hashlib
+import re
+
 import numpy as np
 
-from datagenic import _finance_data as fd
+from datagenic.market_finance import _data as fd
 
 
 def _rng_from(kwargs) -> np.random.Generator:
@@ -451,7 +454,11 @@ class RiskFactorName:
 
 class Counterparty:
     def __init__(self) -> None:
-        self._generator_description = "generates a (fictional) counterparty / legal entity name"
+        self._generator_description = (
+            "generates a counterparty / legal entity name (real large-cap issuers from the "
+            "major indices by default; sector & country available via COUNTERPARTY_METADATA "
+            "and the CounterpartySector / CounterpartyCountry generators)"
+        )
 
     def call(
         self,
@@ -466,6 +473,64 @@ class Counterparty:
 
     def cardinality(self, list_of_values=None, **kwargs):
         return _declared_cardinality(fd.COUNTERPARTIES, list_of_values, kwargs)
+
+
+def _counterparty_attribute(n, counterparty_column, attr, vocab, kwargs):
+    """Per row, map the row's counterparty (read from the partial ``_table``) to its
+    ``attr`` in ``COUNTERPARTY_METADATA`` — so ``(counterparty, sector/country)`` is
+    always coherent. Vectorised per distinct counterparty. Unknown names (or a missing
+    parent column) draw from ``vocab`` on the ``_rng`` (deterministic, rare)."""
+    rng = _rng_from(kwargs)
+    parent = _column_values(kwargs.get("_table"), counterparty_column)
+    if parent is None:
+        return _sample(vocab, n, kwargs)
+    meta = fd.COUNTERPARTY_METADATA
+    out = np.empty(n, dtype=object)
+    for value in np.unique(parent):  # sorted -> deterministic
+        mask = parent == value
+        info = meta.get(str(value))
+        mapped = info.get(attr) if info else None
+        out[mask] = mapped if mapped is not None else rng.choice(vocab, size=int(mask.sum()))
+    return out
+
+
+class CounterpartySector:
+    def __init__(self) -> None:
+        self._generator_description = (
+            "generates the GICS sector coherent with each row's counterparty (reads the "
+            "counterparty_column from the partial table and maps via COUNTERPARTY_METADATA). "
+            "Falls back to a flat GICS-sector draw if that column is absent."
+        )
+
+    def call(
+        self,
+        _number_of_rows_per_batch: int,
+        counterparty_column: str = "counterparty",
+        **kwargs,
+    ):
+        return _counterparty_attribute(
+            _number_of_rows_per_batch, counterparty_column, "sector", fd.GICS_SECTORS, kwargs
+        )
+
+
+class CounterpartyCountry:
+    def __init__(self) -> None:
+        self._generator_description = (
+            "generates the domicile country (ISO-2) coherent with each row's counterparty "
+            "(reads the counterparty_column from the partial table and maps via "
+            "COUNTERPARTY_METADATA). Falls back to a flat draw if that column is absent."
+        )
+
+    def call(
+        self,
+        _number_of_rows_per_batch: int,
+        counterparty_column: str = "counterparty",
+        **kwargs,
+    ):
+        vocab = fd.COUNTERPARTY_COUNTRIES or fd.ISIN_COUNTRIES
+        return _counterparty_attribute(
+            _number_of_rows_per_batch, counterparty_column, "country", vocab, kwargs
+        )
 
 
 class TradingBook:
@@ -502,3 +567,268 @@ class Desk:
 
     def cardinality(self, list_of_values=None, **kwargs):
         return _declared_cardinality(fd.DESKS, list_of_values, kwargs)
+
+
+# ── Trade attributes (fixed-vocabulary categoricals) ─────────────────────────
+
+
+def _fixed_vocab_generator(name, vocab, description):
+    """Build a simple fixed-vocabulary categorical generator class (draws from
+    ``vocab`` on the injected rng, honours list_of_values/probabilities/cardinality
+    and declares ``cardinality()`` — same contract as Currency/Tenor/…)."""
+
+    def call(
+        self,
+        _number_of_rows_per_batch: int,
+        list_of_values: list | None = None,
+        probabilities: list | None = None,
+        **kwargs,
+    ):
+        return _sample(vocab, _number_of_rows_per_batch, kwargs, list_of_values, probabilities)
+
+    def cardinality(self, list_of_values=None, **kwargs):
+        return _declared_cardinality(vocab, list_of_values, kwargs)
+
+    return type(
+        name,
+        (),
+        {
+            "__init__": lambda self: setattr(self, "_generator_description", description),
+            "call": call,
+            "cardinality": cardinality,
+        },
+    )
+
+
+Side = _fixed_vocab_generator("Side", fd.SIDES, "generates a trade side (Buy / Sell)")
+OptionType = _fixed_vocab_generator(
+    "OptionType", fd.OPTION_TYPES, "generates an option type (Call / Put)"
+)
+ExerciseStyle = _fixed_vocab_generator(
+    "ExerciseStyle",
+    fd.EXERCISE_STYLES,
+    "generates an option exercise style (European / American / Bermudan)",
+)
+PaymentFrequency = _fixed_vocab_generator(
+    "PaymentFrequency", fd.PAYMENT_FREQUENCIES, "generates a payment / coupon frequency"
+)
+DayCountConvention = _fixed_vocab_generator(
+    "DayCountConvention",
+    fd.DAY_COUNT_CONVENTIONS,
+    "generates a day-count convention (30/360, ACT/360, …)",
+)
+TradeStatus = _fixed_vocab_generator(
+    "TradeStatus",
+    fd.TRADE_STATUSES,
+    "generates a trade lifecycle status (New / Amended / Live / …)",
+)
+Exchange = _fixed_vocab_generator(
+    "Exchange", fd.EXCHANGES, "generates a trading-venue MIC (ISO 10383, e.g. XNYS, XLON)"
+)
+
+
+class ClearingHouse:
+    def __init__(self) -> None:
+        self._generator_description = (
+            "generates a clearing house / CCP coherent with each row's asset class "
+            "(reads the asset_class_column from the partial table). Falls back to a flat "
+            "draw over all CCPs if that column is absent."
+        )
+
+    def call(
+        self,
+        _number_of_rows_per_batch: int,
+        asset_class_column: str = "asset_class",
+        **kwargs,
+    ):
+        parent = _column_values(kwargs.get("_table"), asset_class_column)
+        if parent is None:
+            return _sample(fd.ALL_CLEARING_HOUSES, _number_of_rows_per_batch, kwargs)
+        return _sample_by_parent(
+            parent,
+            fd.CLEARING_HOUSES_BY_ASSET_CLASS,
+            fd.ALL_CLEARING_HOUSES,
+            _number_of_rows_per_batch,
+            _rng_from(kwargs),
+        )
+
+
+# ── Coherent dates (trade / maturity / settlement) ───────────────────────────
+
+_TENOR_UNIT_DAYS = {"D": 1, "W": 7, "M": 30, "Y": 365}
+
+
+def _tenor_to_days(tenor) -> int:
+    """Approximate calendar-day offset for a tenor string (ON, 1W, 3M, 5Y, …).
+    Defaults to 1Y when unparseable."""
+    t = str(tenor).strip().upper()
+    if t in ("ON", "O/N", "T/N", "TN", "SN"):
+        return 1
+    m = re.fullmatch(r"(\d+)\s*([DWMY])", t)
+    return int(m.group(1)) * _TENOR_UNIT_DAYS[m.group(2)] if m else 365
+
+
+def _base_dates(table, trade_date_column, n, _date):
+    """Row base dates: the trade_date column if present (as datetime64[D]), else the
+    current as-of ``_date`` for every row."""
+    trade = _column_values(table, trade_date_column)
+    if trade is not None:
+        return np.asarray(trade, dtype="datetime64[D]")
+    return np.full(n, np.datetime64(_date, "D"))
+
+
+class TradeDate:
+    def __init__(self) -> None:
+        self._generator_description = (
+            "generates a trade / booking date: a random business-day offset within the last "
+            "`lookback_days` before the current as-of date."
+        )
+
+    def call(self, _number_of_rows_per_batch: int, _date: str, lookback_days: int = 365, **kwargs):
+        base = np.datetime64(_date, "D")
+        offsets = _rng_from(kwargs).integers(
+            0, max(1, int(lookback_days)), size=_number_of_rows_per_batch
+        )
+        return base - offsets.astype("timedelta64[D]")
+
+
+class MaturityDate:
+    def __init__(self) -> None:
+        self._generator_description = (
+            "generates a maturity / expiry date coherent with the row's trade_date and tenor "
+            "(maturity = trade_date + tenor). Reads trade_date_column and tenor_column from the "
+            "partial table; falls back to the as-of date + 1Y when they're absent."
+        )
+
+    def call(
+        self,
+        _number_of_rows_per_batch: int,
+        _date: str,
+        trade_date_column: str = "trade_date",
+        tenor_column: str = "tenor",
+        **kwargs,
+    ):
+        table = kwargs.get("_table")
+        base = _base_dates(table, trade_date_column, _number_of_rows_per_batch, _date)
+        tenor = _column_values(table, tenor_column)
+        if tenor is None:
+            days = np.full(_number_of_rows_per_batch, 365, dtype="int64")
+        else:
+            days = np.array([_tenor_to_days(t) for t in tenor], dtype="int64")
+        return base + days.astype("timedelta64[D]")
+
+
+class SettlementDate:
+    def __init__(self) -> None:
+        self._generator_description = (
+            "generates a settlement / value date = trade_date + settlement_lag_days (default T+2). "
+            "Reads trade_date_column from the partial table; falls back to the as-of date."
+        )
+
+    def call(
+        self,
+        _number_of_rows_per_batch: int,
+        _date: str,
+        trade_date_column: str = "trade_date",
+        settlement_lag_days: int = 2,
+        **kwargs,
+    ):
+        base = _base_dates(
+            kwargs.get("_table"), trade_date_column, _number_of_rows_per_batch, _date
+        )
+        return base + np.timedelta64(int(settlement_lag_days), "D")
+
+
+# ── Counterparty identifiers (coherent with the counterparty name) ────────────
+
+
+def _ticker_for(name: str) -> str:
+    """A deterministic synthetic ticker: the first 4 alphanumerics of the name,
+    uppercased (not a real exchange ticker; stable per name)."""
+    letters = "".join(ch for ch in str(name).upper() if ch.isalnum())
+    return letters[:4] or "XXXX"
+
+
+def _lei_check_digits(body18: str) -> str:
+    """ISO 7064 MOD 97-10 check digits for a 20-char LEI's 18-char body."""
+    numeric = "".join(str(int(ch, 36)) for ch in (body18 + "00"))
+    return f"{98 - int(numeric) % 97:02d}"
+
+
+def _lei_for(name: str) -> str:
+    """A deterministic synthetic LEI: 18 hex chars derived from the name + 2 valid
+    ISO 7064 check digits (passes an LEI checksum; not a registered LEI)."""
+    body = hashlib.sha256(str(name).encode()).hexdigest().upper()[:18]
+    return body + _lei_check_digits(body)
+
+
+class CounterpartyTicker:
+    def __init__(self) -> None:
+        self._generator_description = (
+            "generates a (synthetic, deterministic) ticker coherent with the row's counterparty "
+            "(reads counterparty_column). Random uppercase codes if that column is absent."
+        )
+
+    def call(
+        self, _number_of_rows_per_batch: int, counterparty_column: str = "counterparty", **kwargs
+    ):
+        parent = _column_values(kwargs.get("_table"), counterparty_column)
+        if parent is None:
+            letters = np.array(list("ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+            idx = _rng_from(kwargs).integers(0, 26, size=(_number_of_rows_per_batch, 4))
+            return np.array(["".join(letters[row]) for row in idx], dtype=object)
+        cache: dict[str, str] = {}
+        return np.array([cache.setdefault(str(c), _ticker_for(c)) for c in parent], dtype=object)
+
+
+class CounterpartyLEI:
+    def __init__(self) -> None:
+        self._generator_description = (
+            "generates a (synthetic, deterministic) 20-char LEI with a valid ISO 7064 check "
+            "digit, coherent with the row's counterparty (reads counterparty_column)."
+        )
+
+    def call(
+        self, _number_of_rows_per_batch: int, counterparty_column: str = "counterparty", **kwargs
+    ):
+        parent = _column_values(kwargs.get("_table"), counterparty_column)
+        if parent is None:
+            rng = _rng_from(kwargs)
+            alnum = np.array(list("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+            idx = rng.integers(0, len(alnum), size=(_number_of_rows_per_batch, 18))
+            bodies = ["".join(alnum[row]) for row in idx]
+            return np.array([b + _lei_check_digits(b) for b in bodies], dtype=object)
+        cache: dict[str, str] = {}
+        return np.array([cache.setdefault(str(c), _lei_for(c)) for c in parent], dtype=object)
+
+
+# ── Underlying / reference entity (coherent with asset class) ─────────────────
+
+
+class Underlying:
+    def __init__(self) -> None:
+        self._generator_description = (
+            "generates the underlying / reference entity coherent with the row's asset class: "
+            "a real issuer name for Equity / Credit rows, 'N/A' otherwise (reads "
+            "asset_class_column). Flat draw over issuer names if that column is absent."
+        )
+
+    def call(
+        self,
+        _number_of_rows_per_batch: int,
+        asset_class_column: str = "asset_class",
+        **kwargs,
+    ):
+        rng = _rng_from(kwargs)
+        parent = _column_values(kwargs.get("_table"), asset_class_column)
+        if parent is None:
+            return _sample(fd.COUNTERPARTIES, _number_of_rows_per_batch, kwargs)
+        single_name = {"Equity", "Credit"}
+        out = np.empty(_number_of_rows_per_batch, dtype=object)
+        for value in np.unique(parent):
+            mask = parent == value
+            if str(value) in single_name:
+                out[mask] = rng.choice(fd.COUNTERPARTIES, size=int(mask.sum()))
+            else:
+                out[mask] = "N/A"
+        return out
