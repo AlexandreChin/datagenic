@@ -680,15 +680,35 @@ def _base_dates(table, trade_date_column, n, _date):
 class TradeDate:
     def __init__(self) -> None:
         self._generator_description = (
-            "generates a trade / booking date: a random business-day offset within the last "
-            "`lookback_days` before the current as-of date."
+            "generates a trade / booking date: a random business-day offset before the current "
+            "as-of date. When the row's tenor is available (from `tenor_column` in the partial "
+            "table) the offset is bounded by that tenor (capped at `lookback_days`) so that every "
+            "trade is still live at the as-of date — maturity = trade_date + tenor lands on or "
+            "after it, i.e. maturity >= as-of >= trade_date holds row-wise. Falls back to a flat "
+            "offset within `lookback_days` when no tenor column is present."
         )
 
-    def call(self, _number_of_rows_per_batch: int, _date: str, lookback_days: int = 365, **kwargs):
+    def call(
+        self,
+        _number_of_rows_per_batch: int,
+        _date: str,
+        lookback_days: int = 365,
+        tenor_column: str = "tenor",
+        **kwargs,
+    ):
         base = np.datetime64(_date, "D")
-        offsets = _rng_from(kwargs).integers(
-            0, max(1, int(lookback_days)), size=_number_of_rows_per_batch
-        )
+        rng = _rng_from(kwargs)
+        lookback = max(1, int(lookback_days))
+        tenor = _column_values(kwargs.get("_table"), tenor_column)
+        if tenor is not None:
+            # bound each row's age by its own tenor (capped at lookback) so that
+            # maturity = trade_date + tenor lands on or after the as-of date — every
+            # trade stays live — while trades remain no older than `lookback_days`.
+            tenor_days = np.array([_tenor_to_days(t) for t in tenor], dtype="int64")
+            bound = np.minimum(tenor_days, lookback)
+            offsets = rng.integers(0, bound + 1)  # per-row integer in [0, bound]
+            return base - offsets.astype("timedelta64[D]")
+        offsets = rng.integers(0, lookback, size=_number_of_rows_per_batch)
         return base - offsets.astype("timedelta64[D]")
 
 
@@ -737,6 +757,191 @@ class SettlementDate:
             kwargs.get("_table"), trade_date_column, _number_of_rows_per_batch, _date
         )
         return base + np.timedelta64(int(settlement_lag_days), "D")
+
+
+# ── Rolling book: a constant-size book whose trades roll at maturity ───────────
+#
+# Each row is a "slot" holding exactly one *live* trade at the current as-of date.
+# A slot runs a deterministic renewal process (contiguous: a new trade is booked
+# the day the previous matures), seeded date-independently from the global seed,
+# batch and slot index. At any as-of date the slot emits the trade whose
+# [trade_date, maturity) interval contains it — so every emitted trade is live
+# (trade_date <= as-of < maturity), the book stays exactly N rows, short-tenor
+# slots turn over (a new tenor + a new trade_id on every roll) while long-tenor
+# trades persist. The schedule is a pure function of (global_seed, batch, slot),
+# so it is identical on every date and in every shard/worker — byte-reproducible.
+#
+# These generators key off row index == slot, so the rolling scaffold skips the
+# global key sort (``scale_skip_global_key_sort``) to keep that mapping stable
+# across dates (``recall`` regenerates the frame row by row).
+
+_ROLL_ID_DAY_RADIX = 100_000  # trade_id packing: room for the day-offset component
+_ROLL_ID_EPOCH = np.datetime64("1970-01-01", "D")
+
+
+def _rolling_rng(global_seed, batch, salt: str) -> np.random.Generator:
+    """A date-independent RNG for one draw in a slot's renewal stream: keyed on the
+    global seed, batch and salt only (never the as-of date), so a slot's schedule is
+    identical on every date and in every shard."""
+    digest = hashlib.sha256(f"{global_seed}|{batch}|{salt}".encode()).hexdigest()
+    return np.random.default_rng(int(digest[:16], 16))
+
+
+def _rolling_schedule(n, elapsed, tenor_days_choices, global_seed, batch, probabilities=None):
+    """For each of ``n`` slots return the trade active ``elapsed`` days after the start
+    date, as (book_days, tenor_index): ``book_days`` is the active trade's booking offset
+    (days since start; may be negative), ``tenor_index`` its tenor. Contiguous renewal
+    gives ``book_days <= elapsed < book_days + tenor_days[tenor_index]`` — live by
+    construction. Vectorised lockstep across slots; each slot's k-th trade uses draw k of
+    a date-independent stream, so the sequence is fixed regardless of the as-of date."""
+    m = len(tenor_days_choices)
+
+    def draw_idx(k):
+        rng = _rolling_rng(global_seed, batch, f"tenor:{k}")
+        if probabilities is not None and len(probabilities) == m:
+            return rng.choice(m, size=n, p=probabilities)
+        return rng.integers(0, m, size=n)
+
+    idx = draw_idx(0)
+    tdays = tenor_days_choices[idx]
+    # trade 0's age in [0, tenor_0) so it is already live at the start date
+    age = np.floor(_rolling_rng(global_seed, batch, "age").random(n) * tdays).astype("int64")
+    book = -age
+    mat = book + tdays
+    k = 0
+    while np.any(mat <= elapsed):  # current trade matured on/before the as-of -> roll
+        k += 1
+        roll = mat <= elapsed
+        nidx = draw_idx(k)
+        ntd = tenor_days_choices[nidx]
+        book = np.where(roll, mat, book)
+        idx = np.where(roll, nidx, idx)
+        tdays = np.where(roll, ntd, tdays)
+        mat = book + tdays
+    return book, idx
+
+
+def _rolling_active(kwargs, tenors=None, probabilities=None):
+    """Resolve the active trade for this unit from the injected framework args
+    (date-independent seed). Returns (start_date, book_days, tenor_labels)."""
+    tenors = list(tenors) if tenors else list(fd.TENORS)
+    n = int(kwargs["_number_of_rows_per_batch"])
+    start = np.datetime64(kwargs["_start_date"], "D")
+    asof = np.datetime64(kwargs["_date"], "D")
+    elapsed = int((asof - start).astype("timedelta64[D]").astype("int64"))
+    global_seed = kwargs.get("_global_seed", 0)
+    batch = int(kwargs.get("_batch_number", 1))
+    choices = np.array([_tenor_to_days(t) for t in tenors], dtype="int64")
+    book, idx = _rolling_schedule(n, elapsed, choices, global_seed, batch, probabilities)
+    return start, book, np.asarray(tenors, dtype=object)[idx]
+
+
+class RollingTradeDate:
+    def __init__(self) -> None:
+        self._generator_description = (
+            "rolling-book trade date: the booking date of the trade live at the as-of date "
+            "in each slot's renewal process. A slot rolls at maturity so it always holds a "
+            "live trade (trade_date <= as-of < maturity); the date-independent seed keeps "
+            "the schedule stable across dates and shards. Bias short maturities via "
+            "tenors=[...] / probabilities=[...]."
+        )
+
+    def _compute(self, kwargs, tenors, probabilities):
+        start, book, _ = _rolling_active(kwargs, tenors, probabilities)
+        return start + book.astype("timedelta64[D]")
+
+    def call(self, _number_of_rows_per_batch: int, tenors=None, probabilities=None, **kwargs):
+        kwargs["_number_of_rows_per_batch"] = _number_of_rows_per_batch
+        return self._compute(kwargs, tenors, probabilities)
+
+    def recall(self, input_array=None, tenors=None, probabilities=None, **kwargs):
+        return self._compute(kwargs, tenors, probabilities)
+
+
+class RollingTenor:
+    def __init__(self) -> None:
+        self._generator_description = (
+            "rolling-book tenor: the tenor of the trade live at the as-of date in each slot's "
+            "renewal process (a fresh tenor is drawn on every roll). Coherent with "
+            "RollingTradeDate / RollingMaturityDate via the shared per-slot schedule."
+        )
+
+    def _compute(self, kwargs, tenors, probabilities):
+        _, _, labels = _rolling_active(kwargs, tenors, probabilities)
+        return labels
+
+    def call(self, _number_of_rows_per_batch: int, tenors=None, probabilities=None, **kwargs):
+        kwargs["_number_of_rows_per_batch"] = _number_of_rows_per_batch
+        return self._compute(kwargs, tenors, probabilities)
+
+    def recall(self, input_array=None, tenors=None, probabilities=None, **kwargs):
+        return self._compute(kwargs, tenors, probabilities)
+
+
+class RollingMaturityDate:
+    def __init__(self) -> None:
+        self._generator_description = (
+            "rolling-book maturity date = trade_date + tenor, read from the (rolling) "
+            "trade_date and tenor columns of the partial table — so maturity is always exactly "
+            "consistent with the active trade and strictly after the as-of date."
+        )
+
+    def _compute(self, kwargs, trade_date_column, tenor_column):
+        table = kwargs.get("_table")
+        n = int(kwargs["_number_of_rows_per_batch"])
+        base = _base_dates(table, trade_date_column, n, kwargs["_date"])
+        tenor = _column_values(table, tenor_column)
+        days = (
+            np.array([_tenor_to_days(t) for t in tenor], dtype="int64")
+            if tenor is not None
+            else np.full(n, 365, dtype="int64")
+        )
+        return base + days.astype("timedelta64[D]")
+
+    def call(
+        self,
+        _number_of_rows_per_batch: int,
+        trade_date_column: str = "trade_date",
+        tenor_column: str = "tenor",
+        **kwargs,
+    ):
+        kwargs["_number_of_rows_per_batch"] = _number_of_rows_per_batch
+        return self._compute(kwargs, trade_date_column, tenor_column)
+
+    def recall(
+        self,
+        input_array=None,
+        trade_date_column: str = "trade_date",
+        tenor_column: str = "tenor",
+        **kwargs,
+    ):
+        return self._compute(kwargs, trade_date_column, tenor_column)
+
+
+class RollingTradeId:
+    def __init__(self) -> None:
+        self._generator_description = (
+            "rolling-book trade id: a stable-while-live, new-on-roll integer reference derived "
+            "from (batch, slot, booking date). A persisting trade keeps its id across dates; a "
+            "rolled slot gets a brand-new id. Reads the (rolling) trade_date column."
+        )
+
+    def _compute(self, kwargs, trade_date_column):
+        n = int(kwargs["_number_of_rows_per_batch"])
+        batch = int(kwargs.get("_batch_number", 1))
+        book = _column_values(kwargs.get("_table"), trade_date_column)
+        if book is None:  # trade_date absent (mis-ordered) -> fall back to the as-of date
+            book = np.full(n, np.datetime64(kwargs["_date"], "D"))
+        day_offset = (np.asarray(book, dtype="datetime64[D]") - _ROLL_ID_EPOCH).astype("int64")
+        slot_global = batch * n + np.arange(n, dtype="int64")  # unique per (batch, slot)
+        return slot_global * _ROLL_ID_DAY_RADIX + day_offset
+
+    def call(self, _number_of_rows_per_batch: int, trade_date_column: str = "trade_date", **kwargs):
+        kwargs["_number_of_rows_per_batch"] = _number_of_rows_per_batch
+        return self._compute(kwargs, trade_date_column)
+
+    def recall(self, input_array=None, trade_date_column: str = "trade_date", **kwargs):
+        return self._compute(kwargs, trade_date_column)
 
 
 # ── Counterparty identifiers (coherent with the counterparty name) ────────────

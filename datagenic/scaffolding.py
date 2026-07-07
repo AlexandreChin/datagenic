@@ -334,6 +334,7 @@ class Configs:
         adaptor: Callable[[dict], dict] | None = None,
         semantic_inferrer=None,
         samples=None,
+        rolling_book: bool = False,
     ):
         # Load the source (dict, JSON path, or a plain string → empty IR), then run
         # the optional ``adaptor`` to map it into the IR. The IR is the native input;
@@ -361,8 +362,11 @@ class Configs:
         # ``samples`` (optional) lets a value-based inferrer read real values.
         self._inferrer = resolve_inferrer(semantic_inferrer)
         self._sample_data = self._normalize_samples(samples)
+        self.rolling_book = rolling_book
         self._semantics: dict = {}
         self._compute_semantics()
+        if self.rolling_book:
+            self._apply_rolling_book()
         # per-(fact, fk-column) KeyEnforcer rule options (null_rate / fanout) from the IR
         self._fk_options = self._compute_fk_options()
 
@@ -396,6 +400,12 @@ class Configs:
             },
             "tables": [],
         }
+
+        # Rolling-book generators key off row index == slot; the post-generation key
+        # sort would scramble that mapping across dates (recall regenerates row by row),
+        # so skip it. Row *order* changes only; the row set and key uniqueness do not.
+        if self.rolling_book:
+            self.config_template["default_parameters"]["scale_skip_global_key_sort"] = True
 
         # external ziptables
         for table in self._internal_model["tables"]["zip"]["external"]:
@@ -723,6 +733,49 @@ class Configs:
                 if rec and rec["semantic"] in SEMANTIC_GENERATORS:
                     self._semantics[(tname, col["name"])] = rec
 
+    def _apply_rolling_book(self) -> None:
+        """Turn every trade table into a rolling book: remap the inferred trade_date /
+        tenor / maturity_date semantics to their Rolling* equivalents and map the single
+        unicity key to a rolling trade id. Requires an inferrer (heuristic) to have tagged
+        those columns. On each date the book is a constant-size set of live trades; matured
+        trades roll to freshly-booked ones with new ids. See RollingTradeDate & co."""
+        remap = {
+            "trade_date": "rolling_trade_date",
+            "tenor": "rolling_tenor",
+            "maturity_date": "rolling_maturity_date",
+        }
+        for table in self._ir["tables"]:
+            tname = table["name"]
+            # the column carrying the (rolling) trade date, used as the coherence parent
+            trade_date_col = next(
+                (
+                    c["name"]
+                    for c in table["columns"]
+                    if self._semantics.get((tname, c["name"]), {}).get("semantic") == "trade_date"
+                ),
+                None,
+            )
+            if trade_date_col is None:  # not a trade table (or inference is off) -> leave it
+                continue
+            for col in table["columns"]:
+                rec = self._semantics.get((tname, col["name"]))
+                if rec and rec["semantic"] in remap:
+                    rec["semantic"] = remap[rec["semantic"]]
+                    rec["by"] = "rolling_book"
+                    # trade_date & tenor are schedule roots; maturity reads trade_date
+                    rec["parent"] = (
+                        trade_date_col if rec["semantic"] == "rolling_maturity_date" else None
+                    )
+            keys = table.get("keys", [])
+            if len(keys) == 1:  # the trade id rolls with the book (new id on each roll)
+                self._semantics[(tname, keys[0])] = {
+                    "semantic": "rolling_trade_id",
+                    "confidence": 1.0,
+                    "parent": trade_date_col,
+                    "alternatives": [],
+                    "by": "rolling_book",
+                }
+
     def _apply_semantic(self, temp_col: dict, table_name: str) -> None:
         """Override a column's generator with the one inferred for its semantic,
         recording the inference under ``_inferred`` for manual review/fine-tuning.
@@ -768,13 +821,20 @@ class Configs:
     def _order_for_coherence(columns: list[dict]) -> None:
         """Stably reorder so any column whose inferred parent is in the same table
         comes after that parent: the engine builds columns top-to-bottom and a
-        hierarchy generator reads only the columns built before it. No-op when no
-        column has an ``_inferred`` parent (stable sort with equal keys)."""
-        names = {c["col_name"] for c in columns}
+        hierarchy generator reads only the columns built before it. Depth follows the
+        full parent chain, so multi-level chains (tenor -> trade_date -> maturity_date)
+        order correctly, not just one level. No-op when no column has an ``_inferred``
+        parent (stable sort with equal keys)."""
+        parent_of = {c["col_name"]: (c.get("_inferred") or {}).get("parent") for c in columns}
 
         def _depth(col: dict) -> int:
-            parent = (col.get("_inferred") or {}).get("parent")
-            return 1 if parent and parent in names else 0
+            depth, seen = 0, set()
+            parent = parent_of.get(col["col_name"])
+            while parent and parent in parent_of and parent not in seen:
+                seen.add(parent)  # guard against a cyclic parent link
+                depth += 1
+                parent = parent_of.get(parent)
+            return depth
 
         columns.sort(key=_depth)
 

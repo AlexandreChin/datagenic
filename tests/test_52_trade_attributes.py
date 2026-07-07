@@ -127,6 +127,47 @@ def test_trade_date_is_within_lookback():
     assert (out <= asof).all() and (out > asof - np.timedelta64(365, "D")).all()
 
 
+def test_trades_are_always_live_when_tenor_is_present():
+    # trade-date age is bounded by the row's tenor, so every generated trade is live at
+    # the as-of date — maturity >= as-of >= trade_date holds row-wise, across a mix of
+    # short and long tenors, while maturity = trade_date + tenor stays exact.
+    asof = "2026-07-07"
+    tenors = ["ON", "1W", "1M", "3M", "6M", "1Y", "5Y", "10Y"] * 25  # 200 rows
+    n = len(tenors)
+    trade = gf.TradeDate().call(
+        _number_of_rows_per_batch=n,
+        _date=asof,
+        _table=pl.DataFrame({"tenor": tenors}),
+        _rng=np.random.default_rng(0),
+    )
+    table = pl.DataFrame({"trade_date": trade, "tenor": tenors})
+    mat = gf.MaturityDate().call(_number_of_rows_per_batch=n, _date=asof, _table=table)
+
+    asof_d = np.datetime64(asof, "D")
+    trade_d = np.asarray(trade, dtype="datetime64[D]")
+    mat_d = np.asarray(mat, dtype="datetime64[D]")
+    # the full ordering the flat lookback couldn't guarantee
+    assert (trade_d <= asof_d).all()
+    assert (mat_d >= asof_d).all()
+    # still no older than the default lookback, and maturity is exactly trade + tenor
+    assert (trade_d > asof_d - np.timedelta64(365, "D")).all()
+    expected_days = np.array([gf._tenor_to_days(t) for t in tenors], dtype="timedelta64[D]")
+    assert np.array_equal(mat_d, trade_d + expected_days)
+
+
+def test_trade_date_is_deterministic_with_tenor():
+    kw = dict(
+        _number_of_rows_per_batch=3,
+        _date="2026-07-07",
+        _table=pl.DataFrame({"tenor": ["3M", "5Y", "1M"]}),
+    )
+    a = gf.TradeDate().call(**kw, _rng=np.random.default_rng(7))
+    b = gf.TradeDate().call(**kw, _rng=np.random.default_rng(7))
+    assert np.array_equal(
+        np.asarray(a, dtype="datetime64[D]"), np.asarray(b, dtype="datetime64[D]")
+    )
+
+
 # ── counterparty ticker / LEI (coherent + valid checksum) ─────────────────────
 
 
@@ -163,6 +204,7 @@ def test_inference_maps_and_links_new_fields():
     columns = [
         {"name": "asset_class", "type": "string"},
         {"name": "counterparty", "type": "string"},
+        {"name": "tenor", "type": "string"},
         {"name": "trade_date", "type": "date"},
         {"name": "side", "type": "string"},
         {"name": "clearing_house", "type": "string"},
@@ -187,6 +229,7 @@ def test_inference_maps_and_links_new_fields():
         and inf["cpty_ticker"]["parent"] == "counterparty"
     )
     assert inf["lei"]["semantic"] == "counterparty_lei"
+    assert inf["trade_date"]["parent"] == "tenor"  # bounds trade age -> always live
     assert inf["maturity_date"]["parent"] == "trade_date"
     assert (
         inf["value_date"]["semantic"] == "settlement_date"
@@ -229,11 +272,18 @@ def test_end_to_end_blotter_is_coherent(tmp_path):
         output_folder_path=str(tmp_path / "out"),
         number_of_rows_in_fact_tables=500,
         number_of_batches=1,
+        # a single as-of snapshot: trade dates are frozen at inception, so "every trade is
+        # live" is a point-in-time property — over later reporting dates a short-tenor
+        # trade (immutable booking date) legitimately matures.
+        start_date="2024-06-26",  # a Wednesday (single business-day as-of)
+        end_date="2024-06-26",
         semantic_inferrer="heuristic",
     ).config_template
     order = [c["col_name"] for c in cfg["tables"][0]["columns"]]
     assert order.index("asset_class") < order.index("clearing_house")
-    assert order.index("trade_date") < order.index("maturity_date")
+    # tenor -> trade_date -> maturity_date: the full chain the coherence sort resolves,
+    # so trade-date age is bounded by tenor and every trade is live at the as-of date
+    assert order.index("tenor") < order.index("trade_date") < order.index("maturity_date")
 
     Generator(data_generator_config_file=cfg).generate()
     files = list((tmp_path / "out" / "trades").rglob("*.parquet"))
@@ -252,3 +302,9 @@ def test_end_to_end_blotter_is_coherent(tmp_path):
         for t, m in zip(df["trade_date"].to_list(), df["maturity_date"].to_list(), strict=True)
         if isinstance(t, datetime.date) and isinstance(m, datetime.date)
     )
+    # every trade is live at its as-of date: maturity >= as-of >= trade_date, per partition
+    for f in files:
+        asof = datetime.date.fromisoformat(f.parent.name)  # partition folder = as-of date
+        part = pl.read_parquet(f)
+        assert all(t <= asof for t in part["trade_date"].to_list())
+        assert all(m >= asof for m in part["maturity_date"].to_list())

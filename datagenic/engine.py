@@ -951,6 +951,7 @@ class Generator:
                 "_number_of_batches": number_of_batches,
                 "_number_of_rows_per_batch": table["_number_of_rows_per_batch"],
                 "_rng": _unit_rng,
+                "_global_seed": global_seed,
                 "_is_unicity_key": column["is_unicity_key"],
                 # partial table: columns generated before this one
                 "_table": pl.DataFrame(columns_data),
@@ -1074,6 +1075,7 @@ class Generator:
                     "_number_of_rows_per_batch": table["_number_of_rows_per_batch"],
                     "input_array": current_df[column["col_name"]].to_numpy(),
                     "_rng": _unit_rng,
+                    "_global_seed": global_seed,
                     "_is_unicity_key": column["is_unicity_key"],
                     # partial table: columns recalled before this one
                     "_table": pl.DataFrame(recalled),

@@ -100,7 +100,7 @@ SEMANTIC_GENERATORS: dict[str, tuple[str, str, dict, str | None]] = {
     ),
     "underlying": ("datagenic.market_finance.generators", "Underlying", {}, "asset_class_column"),
     # coherent dates
-    "trade_date": ("datagenic.market_finance.generators", "TradeDate", {}, None),
+    "trade_date": ("datagenic.market_finance.generators", "TradeDate", {}, "tenor_column"),
     "maturity_date": (
         "datagenic.market_finance.generators",
         "MaturityDate",
@@ -110,6 +110,22 @@ SEMANTIC_GENERATORS: dict[str, tuple[str, str, dict, str | None]] = {
     "settlement_date": (
         "datagenic.market_finance.generators",
         "SettlementDate",
+        {},
+        "trade_date_column",
+    ),
+    # rolling book: a constant-size book whose trades roll at maturity (opt-in via
+    # Configs(rolling_book=True), which remaps trade_date/tenor/maturity_date/the key).
+    "rolling_trade_date": ("datagenic.market_finance.generators", "RollingTradeDate", {}, None),
+    "rolling_tenor": ("datagenic.market_finance.generators", "RollingTenor", {}, None),
+    "rolling_maturity_date": (
+        "datagenic.market_finance.generators",
+        "RollingMaturityDate",
+        {},
+        "trade_date_column",
+    ),
+    "rolling_trade_id": (
+        "datagenic.market_finance.generators",
+        "RollingTradeId",
         {},
         "trade_date_column",
     ),
@@ -174,6 +190,11 @@ _COUNTERPARTY_CHILDREN = (
 
 # Dates derived from the row's trade_date (maturity = trade_date + tenor; settlement = +lag).
 _TRADE_DATE_CHILDREN = ("maturity_date", "settlement_date")
+
+# trade_date reads the row's tenor so its age is bounded by that tenor — every trade
+# is live at the as-of date (maturity = trade_date + tenor >= as-of). Ordering the tenor
+# column before trade_date (before maturity_date) is what the coherence sort resolves.
+_TENOR_CHILDREN = ("trade_date",)
 
 # Conditional (scalar or array) numeric semantics that condition on the asset_class
 # column, linked to it the same way the categorical hierarchy children are.
@@ -372,6 +393,7 @@ def _link_hierarchy_parents(result: dict) -> dict:
     links = {
         "asset_class": _HIERARCHY_CHILDREN + _ASSET_CLASS_CONDITIONAL,
         "counterparty": _COUNTERPARTY_CHILDREN,
+        "tenor": _TENOR_CHILDREN,
         "trade_date": _TRADE_DATE_CHILDREN,
     }
     for parent_semantic, children in links.items():

@@ -76,6 +76,34 @@ wire a generator by hand: `{"udf_module": "datagenic.market_finance.generators",
 `values`/`profile` = fitted from your sample (family + params, per-category when conditional);
 `agent` = proposed for the long tail. Categoricals/identifiers are drawn from curated vocabularies.
 
+## Rolling book (live positions across dates)
+
+By default trade attributes are frozen at inception, so a multi-date run is the *same*
+trades observed over time — a short-dated trade booked on the first date has matured by
+later dates. For a **live book** — a constant-size set of positions where matured trades
+drop out and are replaced by freshly-booked ones — scaffold with `rolling_book=True`:
+
+```python
+Configs(input=ir, semantic_inferrer="heuristic", rolling_book=True).dump(file_path="config.json")
+```
+
+Each row is a **slot** running a deterministic renewal process: a trade is booked, matures,
+and the slot immediately re-books a new trade (new tenor, new `trade_id`). At any as-of date
+the slot emits the trade whose `[trade_date, maturity)` interval contains it, so:
+
+- **every emitted trade is live** — `trade_date ≤ as-of < maturity_date`, at *every* date;
+- **`maturity_date = trade_date + tenor`** stays exact (same active trade);
+- the book is **constant size** — short-tenor slots turn over (new id each roll), long-tenor
+  trades persist; the pool never shrinks;
+- it is **byte-reproducible** across dates, shards and workers — the schedule is a pure
+  function of `(global_seed, batch, slot)`, never the as-of date.
+
+`rolling_book=True` remaps the inferred `trade_date` / `tenor` / `maturity_date` and the single
+unicity key to `RollingTradeDate` / `RollingTenor` / `RollingMaturityDate` / `RollingTradeId`
+(so it needs an inferrer). Bias toward short maturities via those generators' `tenors=[...]` /
+`probabilities=[...]` args. `trade_id` is emitted as a packed int; the key sort is skipped
+(`scale_skip_global_key_sort`) so row-index → slot stays stable across dates.
+
 ## Counterparties (real index constituents)
 
 `data/counterparties/*.csv` hold real large-cap names + `sector` (GICS) + `country`, one file
