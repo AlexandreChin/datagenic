@@ -870,7 +870,9 @@ class RollingTradeDate:
         start, book, _ = _rolling_active(kwargs, tenors, probabilities, repeat)
         return start + book.astype("timedelta64[D]")
 
-    def call(self, _number_of_rows_per_batch: int, tenors=None, probabilities=None, repeat=1, **kwargs):
+    def call(
+        self, _number_of_rows_per_batch: int, tenors=None, probabilities=None, repeat=1, **kwargs
+    ):
         kwargs["_number_of_rows_per_batch"] = _number_of_rows_per_batch
         return self._compute(kwargs, tenors, probabilities, repeat)
 
@@ -890,7 +892,9 @@ class RollingTenor:
         _, _, labels = _rolling_active(kwargs, tenors, probabilities, repeat)
         return labels
 
-    def call(self, _number_of_rows_per_batch: int, tenors=None, probabilities=None, repeat=1, **kwargs):
+    def call(
+        self, _number_of_rows_per_batch: int, tenors=None, probabilities=None, repeat=1, **kwargs
+    ):
         kwargs["_number_of_rows_per_batch"] = _number_of_rows_per_batch
         return self._compute(kwargs, tenors, probabilities, repeat)
 
@@ -960,7 +964,13 @@ class RollingTradeId:
         slot_global = batch * positions + pos
         return slot_global * _ROLL_ID_DAY_RADIX + day_offset
 
-    def call(self, _number_of_rows_per_batch: int, trade_date_column: str = "trade_date", repeat=1, **kwargs):
+    def call(
+        self,
+        _number_of_rows_per_batch: int,
+        trade_date_column: str = "trade_date",
+        repeat=1,
+        **kwargs,
+    ):
         kwargs["_number_of_rows_per_batch"] = _number_of_rows_per_batch
         return self._compute(kwargs, trade_date_column, repeat)
 
@@ -979,7 +989,11 @@ class RollingScenario:
 
     def _compute(self, kwargs, list_of_values, count):
         n = int(kwargs["_number_of_rows_per_batch"])
-        labels = list(list_of_values) if list_of_values else [f"scenario_{i}" for i in range(max(1, int(count)))]
+        labels = (
+            list(list_of_values)
+            if list_of_values
+            else [f"scenario_{i}" for i in range(max(1, int(count)))]
+        )
         m = len(labels)
         # row r's scenario == r % m; the schedule generators tile each position m times
         # (block layout), so each position spans exactly the m distinct scenario labels.

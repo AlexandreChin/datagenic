@@ -3,8 +3,10 @@ default-generator selection) and ``Configs`` (IR → full generation config). Sp
 out of ``data_generator`` (package split Part 6).
 """
 
+import importlib
 import json
 import math
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -336,6 +338,7 @@ class Configs:
         samples=None,
         rolling_book: bool = False,
         rolling_scenarios: int = 1,
+        reference_rows: str | int | None = None,
     ):
         # Load the source (dict, JSON path, or a plain string → empty IR), then run
         # the optional ``adaptor`` to map it into the IR. The IR is the native input;
@@ -364,6 +367,8 @@ class Configs:
         self._inferrer = resolve_inferrer(semantic_inferrer)
         self._sample_data = self._normalize_samples(samples)
         self.rolling_book = rolling_book
+        self.reference_rows = reference_rows
+        self._needs_unique_by_construction = False
         self.rolling_scenarios = rolling_scenarios
         self._semantics: dict = {}
         self._compute_semantics()
@@ -631,6 +636,17 @@ class Configs:
             self._order_for_coherence(temp_table["columns"])
             self.config_template["tables"].append(temp_table)
 
+        # Size reference (non-fact) tables to their strict minimal grain when
+        # reference_rows="auto": number_of_rows = ∏ key cardinalities, and make them
+        # broadcast dimensions (single_batch/single_date) so the full grain is produced
+        # once and reused by every fact FK draw. Facts keep their explicit row count.
+        fact_names = {t["name"] for t in self._internal_model["tables"]["fact"]}
+        for temp_table in self.config_template["tables"]:
+            if temp_table["table_name"] not in fact_names:
+                self._size_reference_table(temp_table)
+        if self._needs_unique_by_construction:
+            self.config_template["default_parameters"]["scale_unique_by_construction"] = True
+
         if self.template_postprocessors:
             self._wire_template_postprocessors()
 
@@ -734,6 +750,94 @@ class Configs:
                     }
                 if rec and rec["semantic"] in SEMANTIC_GENERATORS:
                     self._semantics[(tname, col["name"])] = rec
+
+    @staticmethod
+    def _key_cardinality(temp_col: dict):
+        """Distinct values a unicity-key column will produce, and whether that count is
+        *bounded* (a real domain: fixed-vocabulary generator / list_of_values) or *free*
+        (a synthetic id whose cardinality is a convention). Mirrors the engine's
+        budgeting resolution so scaffold-time sizing agrees with generation."""
+        cg = temp_col["column_generator"]
+        args = cg.get("args", {})
+        try:
+            cls = getattr(importlib.import_module(cg["udf_module"]), cg["udf_name"])
+            inst = cls()
+        except Exception:
+            inst = None
+        if inst is not None and hasattr(inst, "cardinality"):
+            try:
+                return int(inst.cardinality(**args)), "bounded"
+            except TypeError:
+                return int(inst.cardinality()), "bounded"
+        if args.get("list_of_values"):
+            return len(args["list_of_values"]), "bounded"
+        return None, "free"
+
+    def _resolve_grain(self, keys: list[dict]) -> tuple[int, dict, bool]:
+        """Strict minimal grain for a reference table: one row per distinct key tuple.
+
+        ``rows = ∏ cardinality(key)``. Bounded keys use their real domain; free keys use
+        the ``number_of_rows_in_non_fact_tables`` budget — and when *two or more* keys are
+        free (the only case cardinality is equalized) that budget is split geometrically so
+        the product stays ≈ the budget instead of blowing up as budget^k. Returns the row
+        count, the per-key cardinality to stamp on each generator, and whether the table
+        needs unique-by-construction enumeration (any composite key)."""
+        budget = self.number_of_rows_in_non_fact_tables
+        cards: dict = {}
+        bounded_product = 1
+        free = []
+        for col in keys:
+            card, kind = self._key_cardinality(col)
+            if kind == "bounded":
+                cards[col["col_name"]] = card
+                bounded_product *= card
+            else:
+                free.append(col)
+        if not free:
+            rows = bounded_product
+        elif len(free) == 1:
+            cards[free[0]["col_name"]] = budget
+            rows = bounded_product * budget
+        else:
+            per = max(1, round(budget ** (1 / len(free))))
+            for col in free:
+                cards[col["col_name"]] = per
+            rows = bounded_product * per ** len(free)
+        return rows, cards, len(keys) > 1
+
+    def _size_reference_table(self, temp_table: dict) -> None:
+        """Set a reference table's row count from its key cardinalities (``reference_rows``
+        = "auto"), stamp each key's cardinality, and mark it a broadcast dimension. An
+        explicit ``reference_rows`` int sets a flat count; ``None`` (default) leaves the
+        legacy flat ``number_of_rows_in_non_fact_tables`` untouched. No keys → flat default."""
+        if self.reference_rows is None:
+            return  # opt-in only: preserve legacy behaviour (golden-safe)
+        if self.reference_rows != "auto":
+            temp_table["number_of_rows"] = self.reference_rows
+            return
+        keys = [c for c in temp_table["columns"] if c.get("is_unicity_key")]
+        if not keys:
+            return  # nothing to infer from — leave number_of_rows_in_non_fact_tables
+        rows, cards, needs_enum = self._resolve_grain(keys)
+        for col in keys:
+            if col["col_name"] in cards:
+                col["column_generator"].setdefault("args", {})["cardinality"] = cards[
+                    col["col_name"]
+                ]
+        temp_table["number_of_rows"] = rows
+        temp_table["single_batch"] = True
+        temp_table["single_date"] = True
+        if needs_enum:
+            self._needs_unique_by_construction = True
+        # A lone bounded-vocabulary key is sampled (not enumerated), so its distinct count
+        # can fall short of the domain — the one case the exact grain isn't guaranteed.
+        if len(keys) == 1 and self._key_cardinality(keys[0])[1] == "bounded":
+            warnings.warn(
+                f"table '{temp_table['table_name']}': sole unicity key is a bounded "
+                f"vocabulary — generated distinct values may fall below its cardinality "
+                f"({rows}); use a composite key or an explicit number_of_rows for an exact grain.",
+                stacklevel=2,
+            )
 
     def _apply_rolling_book(self) -> None:
         """Turn every trade table into a rolling book: remap the inferred trade_date /

@@ -38,6 +38,12 @@ column or plug in your own logic — the scaffold gets you most of the way, you 
 - **Accuracy ladder.** `heuristic` gives a plausible guess, `values`/`profile` **fit the
   distributions from your real sample**, `agent` covers the long tail — every pick annotated
   for review (`datagenic review-config`) and fully hand-editable.
+- **Right-sized reference tables.** With `Configs(reference_rows="auto")` a dimension is
+  sized to its **strict minimal grain** — one row per distinct key tuple (`∏ key
+  cardinalities`), so a `currencies` table is its real domain, not a guessed row count.
+  It becomes a broadcast dimension shared by every fact that references it, and its size is
+  **independent of fact volume** — bump the facts to a billion rows and the dimensions don't
+  change.
 
 A scaffolded `trades` table generates rows like:
 

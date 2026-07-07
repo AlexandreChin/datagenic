@@ -96,6 +96,30 @@ So: mark a table `fact` to make it big and FK-enforced; leave it `referential` (
 `type`) for a small pool that fact tables reference. Both row counts are configurable on
 `Configs(...)` (and overridable per table in the generated config).
 
+### Size reference tables to their grain (`reference_rows="auto"`)
+
+Instead of a flat `number_of_rows_in_non_fact_tables`, let each reference table size itself
+to its **strict minimal grain** — one row per distinct unicity-key tuple:
+
+```python
+Configs(input=ir, semantic_inferrer="heuristic", reference_rows="auto").dump("config.json")
+```
+
+- `number_of_rows = ∏ cardinality(unicity key)`. A **bounded** key (a fixed-vocabulary
+  generator such as `currency`, or a `list_of_values`) uses its real domain; a **free**
+  synthetic-id key uses the `number_of_rows_in_non_fact_tables` budget. Only when **two or
+  more** keys are free is that budget split evenly across them (the sole case cardinalities
+  are equalized) — otherwise each key keeps its own size.
+- Auto references become **broadcast dimensions** (`single_batch`/`single_date`): generated
+  once and shared by every fact that references them, so their size is **independent of fact
+  volume** (scale the facts freely; the dimensions don't change). Composite keys are
+  enumerated exactly (`scale_unique_by_construction`).
+- Default is `reference_rows=None` (legacy flat sizing) — the feature is opt-in and additive.
+- **Caveat:** a table whose *sole* unicity key is a bounded vocabulary is *sampled*, not
+  enumerated, so it can fall short of its full domain (≈0.63× for an N-value domain over N
+  rows) — a warning is emitted. Use a composite key or an explicit `number_of_rows` when you
+  need every domain value exactly.
+
 **Scaffold from another schema — pass `adaptor=fn`**, where `fn(source) -> IR` maps
 your structure into the IR. The adaptor is a plain function: take whatever shape your
 schema has and return the IR dict. For example, suppose your models are described as
