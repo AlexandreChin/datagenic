@@ -335,6 +335,7 @@ class Configs:
         semantic_inferrer=None,
         samples=None,
         rolling_book: bool = False,
+        rolling_scenarios: int = 1,
     ):
         # Load the source (dict, JSON path, or a plain string → empty IR), then run
         # the optional ``adaptor`` to map it into the IR. The IR is the native input;
@@ -363,6 +364,7 @@ class Configs:
         self._inferrer = resolve_inferrer(semantic_inferrer)
         self._sample_data = self._normalize_samples(samples)
         self.rolling_book = rolling_book
+        self.rolling_scenarios = rolling_scenarios
         self._semantics: dict = {}
         self._compute_semantics()
         if self.rolling_book:
@@ -766,14 +768,56 @@ class Configs:
                     rec["parent"] = (
                         trade_date_col if rec["semantic"] == "rolling_maturity_date" else None
                     )
+            # The book's identity is a per-slot trade id that rolls (new id on each
+            # roll). Support composite keys, not just a single key: map an id-like key
+            # column (or the first key that isn't a rolling-schedule column) to
+            # rolling_trade_id. It is unique per slot, so the composite key tuple is
+            # unique BY CONSTRUCTION -> the engine's per-unit dedup is a no-op and the
+            # book keeps its constant size (a shrunk frame would desync recall()).
             keys = table.get("keys", [])
-            if len(keys) == 1:  # the trade id rolls with the book (new id on each roll)
-                self._semantics[(tname, keys[0])] = {
+            schedule_cols = {trade_date_col} | {
+                c["name"]
+                for c in table["columns"]
+                if self._semantics.get((tname, c["name"]), {}).get("semantic")
+                in ("rolling_tenor", "rolling_maturity_date")
+            }
+            free_keys = [k for k in keys if k not in schedule_cols]
+            id_key = next(
+                (k for k in free_keys if k.lower().endswith("id") or "ref" in k.lower()),
+                free_keys[0] if free_keys else None,
+            )
+            scenario_keys = [k for k in free_keys if k != id_key]
+
+            # Scenario dimension (rolling_scenarios=m): repeat each position across m
+            # scenario rows so the trade id recurs while (rolling_trade_id, scenario)
+            # stays unique. Needs exactly one non-id key to carry the scenario labels;
+            # otherwise fall back to one row per position (m == 1).
+            m = max(1, int(getattr(self, "rolling_scenarios", 1) or 1))
+            if m > 1 and len(scenario_keys) != 1:
+                m = 1
+            if m > 1:
+                # tile the schedule roots across the scenario rows (maturity reads the
+                # tiled trade_date/tenor from the frame, so it needs no repeat itself)
+                for col in table["columns"]:
+                    rec = self._semantics.get((tname, col["name"]))
+                    if rec and rec.get("semantic") in ("rolling_trade_date", "rolling_tenor"):
+                        rec["args"] = {**rec.get("args", {}), "repeat": m}
+                self._semantics[(tname, scenario_keys[0])] = {
+                    "semantic": "rolling_scenario",
+                    "confidence": 1.0,
+                    "parent": None,
+                    "alternatives": [],
+                    "by": "rolling_book",
+                    "args": {"count": m},
+                }
+            if id_key is not None:
+                self._semantics[(tname, id_key)] = {
                     "semantic": "rolling_trade_id",
                     "confidence": 1.0,
                     "parent": trade_date_col,
                     "alternatives": [],
                     "by": "rolling_book",
+                    "args": {"repeat": m} if m > 1 else {},
                 }
 
     def _apply_semantic(self, temp_col: dict, table_name: str) -> None:
