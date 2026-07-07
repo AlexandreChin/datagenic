@@ -1141,15 +1141,26 @@ class TenorSensitivities:
         self._generator_description = (
             "generates a tenor-bucketed sensitivity ladder (an array aligned to tenor_grid): "
             "each bucket is a signed value scaled by the row's asset_class, zeroed for every "
-            "bucket beyond the instrument's remaining maturity (maturity_date − as-of). A "
-            "zero-coupon-like instrument (BULLET_INSTRUMENTS) gets a bullet at its maturity "
-            "bucket; a swap/option gets a ladder across all live buckets. Reads asset_class / "
-            "instrument_type / maturity_date from the partial table; recomputes per date via "
-            "recall so the live region shrinks as the trade ages."
+            "bucket beyond the instrument's remaining maturity (maturity_date − as-of). The "
+            "shape depends on the sensi_type and instrument: a spot-risk sensi (equity/FX "
+            "delta or gamma, SPOT_SENSIS_BY_ASSET_CLASS) collapses to a single short-end "
+            "bucket; a zero-coupon-like instrument (BULLET_INSTRUMENTS) gets a bullet at its "
+            "maturity bucket; everything else (rates/credit delta, vega by expiry, rho…) gets "
+            "a ladder across all live buckets. Reads asset_class / instrument_type / "
+            "maturity_date / sensi_type from the partial table; recomputes per date via recall "
+            "so the live region shrinks as the trade ages."
         )
 
     def _compute(
-        self, kwargs, tenor_grid, by_column, instrument_column, maturity_date_column, magnitude
+        self,
+        kwargs,
+        tenor_grid,
+        by_column,
+        instrument_column,
+        maturity_date_column,
+        sensi_type_column,
+        sensi_type,
+        magnitude,
     ):
         n = int(kwargs["_number_of_rows_per_batch"])
         grid = list(tenor_grid) if tenor_grid else list(fd.DEFAULT_TENOR_GRID)
@@ -1188,6 +1199,22 @@ class TenorSensitivities:
             else np.zeros(n, dtype=bool)
         )
 
+        # per-row spot flag: a spot-risk sensi (e.g. equity/FX delta) is a single point, not a
+        # curve — resolve sensi_type from the column, else the fixed `sensi_type` arg.
+        sensi = _column_values(table, sensi_type_column)
+        if sensi is None and sensi_type is not None:
+            sensi = np.full(n, sensi_type)
+        if sensi is not None and asset_class is not None:
+            is_spot = np.array(
+                [
+                    str(st) in fd.SPOT_SENSIS_BY_ASSET_CLASS.get(str(ac), ())
+                    for ac, st in zip(asset_class, sensi, strict=False)
+                ],
+                dtype=bool,
+            )
+        else:
+            is_spot = np.zeros(n, dtype=bool)
+
         # snap each row's remaining maturity to its nearest grid bucket, then keep every
         # bucket up to and including it (so a trade maturing in ~1M keeps ≤1M, zeroes >1M);
         # a non-positive remaining (matured) leaves no live bucket.
@@ -1206,6 +1233,13 @@ class TenorSensitivities:
         bullet[rows, cols] = draws[rows, cols]
 
         out = np.where(is_bullet[:, None], bullet, ladder)
+
+        # spot-risk sensis override to a single short-end (spot) bucket while live
+        if is_spot.any():
+            spot = np.zeros((n, length))
+            spot_rows = np.arange(n)[is_spot & live[:, 0]]
+            spot[spot_rows, 0] = draws[spot_rows, 0]
+            out = np.where(is_spot[:, None], spot, out)
         return [row.tolist() for row in out]
 
     def call(
@@ -1215,12 +1249,21 @@ class TenorSensitivities:
         by_column: str = "asset_class",
         instrument_column: str = "instrument_type",
         maturity_date_column: str = "maturity_date",
+        sensi_type_column: str = "sensi_type",
+        sensi_type=None,
         magnitude=None,
         **kwargs,
     ):
         kwargs["_number_of_rows_per_batch"] = _number_of_rows_per_batch
         return self._compute(
-            kwargs, tenor_grid, by_column, instrument_column, maturity_date_column, magnitude
+            kwargs,
+            tenor_grid,
+            by_column,
+            instrument_column,
+            maturity_date_column,
+            sensi_type_column,
+            sensi_type,
+            magnitude,
         )
 
     def recall(
@@ -1230,9 +1273,18 @@ class TenorSensitivities:
         by_column: str = "asset_class",
         instrument_column: str = "instrument_type",
         maturity_date_column: str = "maturity_date",
+        sensi_type_column: str = "sensi_type",
+        sensi_type=None,
         magnitude=None,
         **kwargs,
     ):
         return self._compute(
-            kwargs, tenor_grid, by_column, instrument_column, maturity_date_column, magnitude
+            kwargs,
+            tenor_grid,
+            by_column,
+            instrument_column,
+            maturity_date_column,
+            sensi_type_column,
+            sensi_type,
+            magnitude,
         )

@@ -114,6 +114,15 @@ SENSI_MAGNITUDE_BY_ASSET_CLASS = {
 }
 SENSI_MAGNITUDE_DEFAULT = 1.0e4
 
+# (asset_class -> sensi_types) whose risk factor is a single *spot* point, not a curve:
+# equity/FX delta & gamma are sensitivities to a spot price, so they collapse to one
+# bucket at the short (spot) end rather than a tenor ladder. Curve/surface sensis (rates
+# delta, credit spread, vega by expiry, rho…) stay tenorized. Extend per desk.
+SPOT_SENSIS_BY_ASSET_CLASS = {
+    "Equity": {"delta", "gamma"},
+    "FX": {"delta", "gamma"},
+}
+
 # ── Market dimensions ────────────────────────────────────────────────────────
 
 # ISO 4217, ordered roughly by liquidity (majors first).

@@ -62,9 +62,13 @@ ladder** — an `array(float)` aligned to a tenor grid (`DEFAULT_TENOR_GRID`, or
 arg / reference table). For each row it is:
 
 - **scaled by `asset_class`** — a Rates rate-delta dwarfs an Equity one (`SENSI_MAGNITUDE_BY_ASSET_CLASS`);
-- **shaped by `instrument_type`** — a *bullet* (one non-zero bucket at maturity) for
-  zero-coupon-like instruments (`BULLET_INSTRUMENTS`: FX forwards, futures, ETFs, FRAs…), a
-  *ladder* (all live buckets) for swaps, options, coupon bonds, CDS…;
+- **shaped by `sensi_type` and `instrument_type`** (precedence *spot → bullet → ladder*): a
+  **spot-risk sensi** (equity/FX `delta`/`gamma`, `SPOT_SENSIS_BY_ASSET_CLASS`) is a single
+  short-end bucket — a spot is a point, not a curve; a zero-coupon-like instrument
+  (`BULLET_INSTRUMENTS`: FX forwards, futures, ETFs, FRAs…) is a *bullet* at its maturity
+  bucket; everything else (rates/credit delta, **vega by expiry**, rho…) is a *ladder* across
+  all live buckets. So the same FX forward yields a spot-point `delta` but a maturity-bullet
+  `rho`. `sensi_type` is read per-row from a column, or fixed with a `sensi_type` arg;
 - **zeroed beyond maturity** — buckets past the instrument's remaining maturity
   (`maturity_date − as-of`, snapped to the nearest grid bucket) are `0`, so a trade maturing
   in ~1M has non-zero sensis only up to the `1M` bucket. It `recall`s per date, so the live

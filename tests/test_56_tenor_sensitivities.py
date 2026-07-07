@@ -19,24 +19,26 @@ _GRID = fd.DEFAULT_TENOR_GRID
 _GRID_DAYS = np.array([gf._tenor_to_days(t) for t in _GRID])
 
 
-def _ladder(asset_class, instrument, maturity, asof="2026-07-07", seed=0, n=None, grid=None):
+def _ladder(
+    asset_class, instrument, maturity, asof="2026-07-07", seed=0, n=None, grid=None, sensi=None
+):
     """Run TenorSensitivities for hand-built rows and return (n, L) sensis + the grid."""
     acs = asset_class if isinstance(asset_class, list) else [asset_class]
     insts = instrument if isinstance(instrument, list) else [instrument]
     mats = maturity if isinstance(maturity, list) else [maturity]
     n = n or len(acs)
-    table = pl.DataFrame(
-        {
-            "asset_class": acs,
-            "instrument_type": insts,
-            "maturity_date": np.array(mats, dtype="datetime64[D]"),
-        }
-    )
+    data = {
+        "asset_class": acs,
+        "instrument_type": insts,
+        "maturity_date": np.array(mats, dtype="datetime64[D]"),
+    }
+    if sensi is not None:
+        data["sensi_type"] = sensi if isinstance(sensi, list) else [sensi] * n
     out = gf.TenorSensitivities().call(
         _number_of_rows_per_batch=n,
         _date=asof,
         tenor_grid=grid,
-        _table=table,
+        _table=pl.DataFrame(data),
         _rng=np.random.default_rng(seed),
     )
     return np.array(out)
@@ -59,6 +61,36 @@ def test_ladder_instrument_spreads_across_live_buckets():
     nz = {_GRID[i] for i in np.nonzero(s)[0]}
     assert {"ON", "1M", "1Y", "5Y"} <= nz  # spread, not a single point
     assert len(nz) > 5
+
+
+# ── shape keyed on sensi_type (spot vs curve risk) ─────────────────────────────
+
+
+def test_spot_sensi_collapses_to_a_single_short_end_bucket():
+    # equity/FX delta is a spot-price risk — a point, not a tenor ladder
+    for ac, inst in [("Equity", "Equity Option"), ("FX", "FX Forward")]:
+        s = _ladder(ac, inst, "2029-07-07", sensi="delta")[0]
+        nz = np.nonzero(s)[0]
+        assert len(nz) == 1 and _GRID[nz[0]] == "ON"  # one bucket, at the short (spot) end
+
+
+def test_curve_sensi_stays_a_ladder_even_for_equity():
+    # equity VEGA has a term structure (vol by expiry) -> a ladder, not a point
+    s = _ladder("Equity", "Equity Option", "2029-07-07", sensi="vega")[0]
+    assert np.count_nonzero(s) > 5
+
+
+def test_same_instrument_different_sensi_type_differs():
+    # an FX forward's delta is a spot point, its rho is a rates bullet at maturity
+    delta = _ladder("FX", "FX Forward", "2026-10-07", sensi="delta")[0]
+    rho = _ladder("FX", "FX Forward", "2026-10-07", sensi="rho")[0]
+    assert _GRID[np.nonzero(delta)[0][0]] == "ON"  # spot
+    assert _GRID[np.nonzero(rho)[0][0]] == "3M"  # bullet at the ~3M maturity
+
+
+def test_no_sensi_type_falls_back_to_instrument_shape():
+    # without a sensi_type the spot rule can't fire -> instrument shape (ladder here)
+    assert np.count_nonzero(_ladder("Equity", "Equity Option", "2029-07-07")[0]) > 5
 
 
 # ── the maturity cap (zero beyond maturity, nearest bucket) ────────────────────
