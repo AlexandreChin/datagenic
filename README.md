@@ -33,6 +33,7 @@ column or plug in your own logic — the scaffold gets you most of the way, you 
   - **valid identifiers** — ISIN / CUSIP / SEDOL with real check digits (they pass validators, unique per run)
   - **quantities scaled by asset class** — `notional` & `mtm` come out lognormal at the right magnitude (an Equity notional ≈ \$100k, a Rates notional ≈ tens of millions); a `pnl` array becomes a per-row **time series**
   - **coherent dates** — `maturity = trade_date + tenor`, settlement = trade + lag
+  - **tenor-bucketed sensitivities** — a risk ladder (`array(float)`) scaled by asset class, shaped by instrument (bullet vs ladder), and **zeroed beyond maturity** (a trade maturing in 1M has no sensitivity past the 1M bucket)
   - **rolling positions** — an optional **live book** (`rolling_book=True`): matured trades roll to freshly-booked ones, so every as-of date is a constant-size set of live trades (`trade_date ≤ as-of < maturity`)
   - **market dimensions** — currencies, tenors, ratings, GICS sectors, ~1,000 real counterparties, books & desks
 - **Accuracy ladder.** `heuristic` gives a plausible guess, `values`/`profile` **fit the

@@ -78,6 +78,42 @@ ALL_RISK_FACTOR_GROUPS = [
     rfg for rfgs in RISK_FACTOR_GROUPS_BY_ASSET_CLASS.values() for rfg in rfgs
 ]
 
+# ── Tenor-bucketed sensitivities ─────────────────────────────────────────────
+# A sensitivity ladder is an array of risk numbers aligned to a tenor grid (the
+# axis). See generators.TenorSensitivities.
+
+# Kinds of sensitivity a ladder can hold.
+SENSI_TYPES = ["delta", "gamma", "vega", "theta", "rho"]
+
+# Default tenor axis (ascending) the ladder is bucketed on; overridable per config
+# (a `tenor_grid` arg) or from a reference table. Every label parses via _tenor_to_days.
+DEFAULT_TENOR_GRID = [
+    "ON", "1W", "2W", "1M", "2M", "3M", "6M", "9M",
+    "1Y", "2Y", "3Y", "5Y", "7Y", "10Y", "15Y", "20Y", "25Y", "30Y",
+]  # fmt: skip
+
+# Instruments whose risk sits at a single point (one cashflow / zero-coupon-like):
+# their ladder is a *bullet* concentrated at the maturity bucket. Everything else
+# (swaps, options, coupon bonds, CDS, …) gets a *ladder* spread across live buckets.
+BULLET_INSTRUMENTS = {
+    "FX Spot", "FX Forward", "FX Swap", "Non-Deliverable Forward",
+    "FRA", "Bond Future",
+    "Equity Spot", "Equity Future", "Dividend Future", "ETF",
+    "Commodity Future", "Commodity Forward",
+}  # fmt: skip
+
+# Per-asset-class magnitude (σ of a signed normal) for a single ladder bucket — a
+# Rates rate-delta dwarfs an Equity rate-delta. Book-agnostic; override per config.
+SENSI_MAGNITUDE_BY_ASSET_CLASS = {
+    "Rates": 5.0e4,
+    "Credit": 2.0e4,
+    "Equity": 1.0e4,
+    "FX": 1.5e4,
+    "Commodity": 1.0e4,
+    "Inflation": 3.0e4,
+}
+SENSI_MAGNITUDE_DEFAULT = 1.0e4
+
 # ── Market dimensions ────────────────────────────────────────────────────────
 
 # ISO 4217, ordered roughly by liquidity (majors first).

@@ -47,13 +47,33 @@ Detected by column **name** (`heuristic`), **sample values** (`values`), or an *
 `expected_shortfall`, and the Greeks `delta`/`gamma`/`vega`/`theta`/`rho`.
 
 **Array numeric** (`array(float)`): `pnl_series`\* (scaled by asset class), `returns`, `curve`,
-`sensitivities`.
+`sensitivities`, and `sensis`\* — a **tenor-bucketed sensitivity ladder** (see below).
 
 **Dates**: `trade_date`, `maturity_date`\* (`= trade_date + tenor`), `settlement_date`\*
 (`= trade_date + lag`).
 
 \* **coherent** — reads a parent column from the partial row (asset\_class, counterparty, or
 trade\_date) and stays consistent with it; the scaffolder orders the parent first.
+
+## Tenor-bucketed sensitivities
+
+`TenorSensitivities` (semantic `tenor_sensitivities`, e.g. a `sensis` column) emits a **risk
+ladder** — an `array(float)` aligned to a tenor grid (`DEFAULT_TENOR_GRID`, or a `tenor_grid`
+arg / reference table). For each row it is:
+
+- **scaled by `asset_class`** — a Rates rate-delta dwarfs an Equity one (`SENSI_MAGNITUDE_BY_ASSET_CLASS`);
+- **shaped by `instrument_type`** — a *bullet* (one non-zero bucket at maturity) for
+  zero-coupon-like instruments (`BULLET_INSTRUMENTS`: FX forwards, futures, ETFs, FRAs…), a
+  *ladder* (all live buckets) for swaps, options, coupon bonds, CDS…;
+- **zeroed beyond maturity** — buckets past the instrument's remaining maturity
+  (`maturity_date − as-of`, snapped to the nearest grid bucket) are `0`, so a trade maturing
+  in ~1M has non-zero sensis only up to the `1M` bucket. It `recall`s per date, so the live
+  region shrinks as the trade ages (while `trade_date`/`maturity_date` stay fixed).
+
+Companion generators: `SensiType` (`delta`/`gamma`/`vega`/`theta`/`rho`) and `TenorGrid` (the
+axis). Works whether `sensis` is a column on the trades table or a row in a separate
+sensitivities table — it just reads `asset_class`/`instrument_type`/`maturity_date` from the
+partial row.
 
 ## Using it
 

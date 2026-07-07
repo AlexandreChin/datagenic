@@ -57,6 +57,16 @@ SEMANTIC_GENERATORS: dict[str, tuple[str, str, dict, str | None]] = {
     "sedol": ("datagenic.market_finance.generators", "SEDOL", {}, None),
     "instrument_name": ("datagenic.market_finance.generators", "InstrumentName", {}, None),
     "risk_factor_name": ("datagenic.market_finance.generators", "RiskFactorName", {}, None),
+    # tenor-bucketed sensitivities: a ladder array scaled by asset_class, shaped by
+    # instrument_type, and zeroed beyond the remaining maturity (reads maturity_date).
+    "sensi_type": ("datagenic.market_finance.generators", "SensiType", {}, None),
+    "tenor_grid": ("datagenic.market_finance.generators", "TenorGrid", {}, None),
+    "tenor_sensitivities": (
+        "datagenic.market_finance.generators",
+        "TenorSensitivities",
+        {},
+        "maturity_date_column",
+    ),
     "counterparty": ("datagenic.market_finance.generators", "Counterparty", {}, None),
     "counterparty_sector": (
         "datagenic.market_finance.generators",
@@ -192,6 +202,10 @@ _COUNTERPARTY_CHILDREN = (
 # Dates derived from the row's trade_date (maturity = trade_date + tenor; settlement = +lag).
 _TRADE_DATE_CHILDREN = ("maturity_date", "settlement_date")
 
+# A sensitivity ladder reads the row's maturity_date (to zero buckets beyond it), so it
+# must be generated after maturity_date (and hence after asset_class / instrument_type).
+_MATURITY_CHILDREN = ("tenor_sensitivities",)
+
 # trade_date reads the row's tenor so its age is bounded by that tenor — every trade
 # is live at the as-of date (maturity = trade_date + tenor >= as-of). Ordering the tenor
 # column before trade_date (before maturity_date) is what the coherence sort resolves.
@@ -214,6 +228,7 @@ _PATTERNS: list[tuple[str, str, float]] = [
     (r"(currency|ccy|fx)[_ ]?pair", "currency_pair", 0.9),
     (r"risk[_ ]?factor[_ ]?(group|class)|rf[_ ]?group|riskfactorgroup", "risk_factor_group", 0.9),
     (r"risk[_ ]?factor[_ ]?name|rf[_ ]?name", "risk_factor_name", 0.85),
+    (r"sensi[_ ]?type|greek[_ ]?type|risk[_ ]?measure", "sensi_type", 0.9),
     (r"instrument[_ ]?type|instr[_ ]?type|product[_ ]?type", "instrument_type", 0.9),
     (r"instrument[_ ]?name|security[_ ]?name|instr[_ ]?name", "instrument_name", 0.85),
     (r"asset[_ ]?class|assetclass|asset[_ ]?cls", "asset_class", 0.9),
@@ -283,6 +298,7 @@ _ARRAY_NUMERIC_PATTERNS: list[tuple[str, str, float]] = [
     (r"\bpnl\b|pnl[_ ]?(series|vector|path|ts)|profit[_ ]?and[_ ]?loss", "pnl_series", 0.8),
     (r"return|\brtns?\b", "returns", 0.7),
     (r"curve|term[_ ]?structure|yield[_ ]?curve", "curve", 0.75),
+    (r"\bsensis?\b|tenor[_ ]?sensi|sensi[_ ]?ladder|delta[_ ]?ladder", "tenor_sensitivities", 0.85),
     (r"sensitivit|\bdeltas\b|bucket|risk[_ ]?weights?|\bladder\b", "sensitivities", 0.8),
 ]
 _ARRAY_NUMERIC_COMPILED = [
@@ -396,6 +412,7 @@ def _link_hierarchy_parents(result: dict) -> dict:
         "counterparty": _COUNTERPARTY_CHILDREN,
         "tenor": _TENOR_CHILDREN,
         "trade_date": _TRADE_DATE_CHILDREN,
+        "maturity_date": _MATURITY_CHILDREN,
     }
     for parent_semantic, children in links.items():
         parent_col = next(

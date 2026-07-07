@@ -1100,3 +1100,139 @@ class Underlying:
             else:
                 out[mask] = "N/A"
         return out
+
+
+# ── Tenor-bucketed sensitivities ──────────────────────────────────────────────
+
+
+class SensiType:
+    def __init__(self) -> None:
+        self._generator_description = "generates a sensitivity type (delta, gamma, vega, …)"
+
+    def call(
+        self,
+        _number_of_rows_per_batch: int,
+        list_of_values: list | None = None,
+        probabilities: list | None = None,
+        **kwargs,
+    ):
+        return _sample(
+            fd.SENSI_TYPES, _number_of_rows_per_batch, kwargs, list_of_values, probabilities
+        )
+
+    def cardinality(self, list_of_values=None, **kwargs):
+        return _declared_cardinality(fd.SENSI_TYPES, list_of_values, kwargs)
+
+
+class TenorGrid:
+    def __init__(self) -> None:
+        self._generator_description = (
+            "emits the tenor axis — the same ascending grid on every row — that a sensitivity "
+            "ladder is bucketed on. Override with tenor_grid=[...] (or fill from a reference table)."
+        )
+
+    def call(self, _number_of_rows_per_batch: int, tenor_grid=None, **kwargs):
+        grid = list(tenor_grid) if tenor_grid else list(fd.DEFAULT_TENOR_GRID)
+        return [grid for _ in range(_number_of_rows_per_batch)]
+
+
+class TenorSensitivities:
+    def __init__(self) -> None:
+        self._generator_description = (
+            "generates a tenor-bucketed sensitivity ladder (an array aligned to tenor_grid): "
+            "each bucket is a signed value scaled by the row's asset_class, zeroed for every "
+            "bucket beyond the instrument's remaining maturity (maturity_date − as-of). A "
+            "zero-coupon-like instrument (BULLET_INSTRUMENTS) gets a bullet at its maturity "
+            "bucket; a swap/option gets a ladder across all live buckets. Reads asset_class / "
+            "instrument_type / maturity_date from the partial table; recomputes per date via "
+            "recall so the live region shrinks as the trade ages."
+        )
+
+    def _compute(
+        self, kwargs, tenor_grid, by_column, instrument_column, maturity_date_column, magnitude
+    ):
+        n = int(kwargs["_number_of_rows_per_batch"])
+        grid = list(tenor_grid) if tenor_grid else list(fd.DEFAULT_TENOR_GRID)
+        grid_days = np.array([_tenor_to_days(t) for t in grid], dtype="int64")  # (L,), ascending
+        length = len(grid)
+        table = kwargs.get("_table")
+        rng = _rng_from(kwargs)
+
+        # per-row magnitude (σ of a signed normal) from asset_class
+        mag = magnitude or fd.SENSI_MAGNITUDE_BY_ASSET_CLASS
+        asset_class = _column_values(table, by_column)
+        if asset_class is not None:
+            sigma = np.array(
+                [mag.get(str(a), fd.SENSI_MAGNITUDE_DEFAULT) for a in asset_class], dtype=float
+            )
+        else:
+            sigma = np.full(n, fd.SENSI_MAGNITUDE_DEFAULT)
+
+        # per-row remaining maturity in days; no maturity column -> no cap (all buckets live)
+        asof = np.datetime64(kwargs["_date"], "D")
+        maturity = _column_values(table, maturity_date_column)
+        if maturity is not None:
+            remaining = (
+                (np.asarray(maturity, dtype="datetime64[D]") - asof)
+                .astype("timedelta64[D]")
+                .astype("int64")
+            )
+        else:
+            remaining = np.full(n, int(grid_days[-1]) + 1, dtype="int64")
+
+        # per-row shape: bullet (single cashflow) vs ladder (term structure)
+        instrument = _column_values(table, instrument_column)
+        is_bullet = (
+            np.array([str(i) in fd.BULLET_INSTRUMENTS for i in instrument], dtype=bool)
+            if instrument is not None
+            else np.zeros(n, dtype=bool)
+        )
+
+        # snap each row's remaining maturity to its nearest grid bucket, then keep every
+        # bucket up to and including it (so a trade maturing in ~1M keeps ≤1M, zeroes >1M);
+        # a non-positive remaining (matured) leaves no live bucket.
+        maturity_bucket = grid_days[np.abs(grid_days[None, :] - remaining[:, None]).argmin(axis=1)]
+        live = (grid_days[None, :] <= maturity_bucket[:, None]) & (remaining[:, None] > 0)
+        draws = rng.standard_normal((n, length)) * sigma[:, None]  # signed, asset-class-scaled
+        ladder = draws * live  # spread across every live bucket
+
+        # bullet: keep only the maturity bucket (largest live tenor)
+        bullet = np.zeros((n, length))
+        masked_days = np.where(live, grid_days[None, :], -1)
+        bullet_idx = masked_days.argmax(axis=1)
+        has_live = live.any(axis=1)
+        rows = np.arange(n)[has_live]
+        cols = bullet_idx[has_live]
+        bullet[rows, cols] = draws[rows, cols]
+
+        out = np.where(is_bullet[:, None], bullet, ladder)
+        return [row.tolist() for row in out]
+
+    def call(
+        self,
+        _number_of_rows_per_batch: int,
+        tenor_grid=None,
+        by_column: str = "asset_class",
+        instrument_column: str = "instrument_type",
+        maturity_date_column: str = "maturity_date",
+        magnitude=None,
+        **kwargs,
+    ):
+        kwargs["_number_of_rows_per_batch"] = _number_of_rows_per_batch
+        return self._compute(
+            kwargs, tenor_grid, by_column, instrument_column, maturity_date_column, magnitude
+        )
+
+    def recall(
+        self,
+        input_array=None,
+        tenor_grid=None,
+        by_column: str = "asset_class",
+        instrument_column: str = "instrument_type",
+        maturity_date_column: str = "maturity_date",
+        magnitude=None,
+        **kwargs,
+    ):
+        return self._compute(
+            kwargs, tenor_grid, by_column, instrument_column, maturity_date_column, magnitude
+        )
