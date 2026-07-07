@@ -129,6 +129,7 @@ SEMANTIC_GENERATORS: dict[str, tuple[str, str, dict, str | None]] = {
         {},
         "trade_date_column",
     ),
+    "rolling_scenario": ("datagenic.market_finance.generators", "RollingScenario", {}, None),
 }
 
 # Numeric quantity semantics: a distribution-aware float generator wired with a

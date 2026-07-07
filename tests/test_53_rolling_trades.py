@@ -195,6 +195,83 @@ def test_end_to_end_rolling_book(tmp_path):
     assert len(counts) >= 2 and len(set(counts)) == 1  # same row count on every date
 
 
+def test_composite_key_rolling_book(tmp_path):
+    """A composite unicity key must work: rolling_trade_id is mapped to the id-like key
+    column, so the tuple is unique by construction, the per-unit dedup is a no-op and the
+    book keeps its constant size across dates. Regression: a plain (non-id) composite key
+    let the dedup shrink date 1, which then desynced recall() -> ShapeError."""
+    ir = _rolling_ir()
+    ir["tables"][0]["keys"] = ["trade_id", "book"]
+    ir["tables"][0]["columns"].append({"name": "book", "type": "string"})
+    out = tmp_path / "out"
+    cfg = Configs(
+        input=ir,
+        output_format="parquet",
+        output_folder_path=str(out),
+        number_of_rows_in_fact_tables=400,
+        number_of_batches=1,
+        start_date="2024-01-01",
+        end_date="2024-01-05",
+        seed=3,
+        semantic_inferrer="heuristic",
+        rolling_book=True,
+    ).config_template
+    gens = {c["col_name"]: c["column_generator"]["udf_name"] for c in cfg["tables"][0]["columns"]}
+    assert gens["trade_id"] == "RollingTradeId"  # the id-like key rolls, even in a composite key
+
+    Generator(data_generator_config_file=cfg).generate()
+    counts = []
+    for f in sorted((out / "trades").rglob("*.parquet")):
+        df = pl.read_parquet(f)
+        counts.append(len(df))
+        assert df.select(["trade_id", "book"]).n_unique() == len(df)  # unique by construction
+    assert len(counts) >= 2 and len(set(counts)) == 1  # constant-size book across dates
+
+
+def test_scenario_expansion_repeats_trade_id_across_scenarios(tmp_path):
+    """rolling_scenarios=m repeats each position across m scenario rows: the trade id
+    recurs (so the composite key is genuinely composite) while (rolling_trade_id, scenario)
+    stays unique, and a trade's schedule is identical across its scenario rows."""
+    import math
+
+    ir = _rolling_ir()
+    ir["tables"][0]["keys"] = ["trade_id", "mtf_scenario"]
+    ir["tables"][0]["columns"].append({"name": "mtf_scenario", "type": "string"})
+    out = tmp_path / "out"
+    cfg = Configs(
+        input=ir,
+        output_format="parquet",
+        output_folder_path=str(out),
+        number_of_rows_in_fact_tables=100,
+        number_of_batches=1,
+        start_date="2024-01-01",
+        end_date="2024-01-04",
+        seed=3,
+        semantic_inferrer="heuristic",
+        rolling_book=True,
+        rolling_scenarios=5,
+    ).config_template
+    gens = {c["col_name"]: c["column_generator"]["udf_name"] for c in cfg["tables"][0]["columns"]}
+    assert gens["trade_id"] == "RollingTradeId"
+    assert gens["mtf_scenario"] == "RollingScenario"  # the non-id key carries the scenarios
+
+    Generator(data_generator_config_file=cfg).generate()
+    counts = []
+    for f in sorted((out / "trades").rglob("*.parquet")):
+        df = pl.read_parquet(f)
+        counts.append(len(df))
+        assert df.select(["trade_id", "mtf_scenario"]).n_unique() == len(df)  # composite unique
+        assert df["trade_id"].n_unique() == math.ceil(len(df) / 5)  # positions = rows / scenarios
+        per = df.group_by("trade_id").agg(
+            pl.col("mtf_scenario").n_unique().alias("scen"),
+            pl.col("trade_date").n_unique().alias("td"),
+            pl.col("tenor").n_unique().alias("tn"),
+        )
+        assert (per["scen"] == 5).all()  # each trade appears under all 5 scenarios
+        assert (per["td"] == 1).all() and (per["tn"] == 1).all()  # one schedule per trade
+    assert len(counts) >= 2 and len(set(counts)) == 1  # constant-size book across dates
+
+
 def _hash_tree(root):
     root = Path(root)
     return {

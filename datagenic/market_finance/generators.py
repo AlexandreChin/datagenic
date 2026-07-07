@@ -821,18 +821,38 @@ def _rolling_schedule(n, elapsed, tenor_days_choices, global_seed, batch, probab
     return book, idx
 
 
-def _rolling_active(kwargs, tenors=None, probabilities=None):
+def _rolling_positions(n, repeat):
+    """Number of distinct positions (slots) behind ``n`` rows when each position is
+    repeated ``repeat`` times (a scenario dimension). ``repeat=1`` -> row == slot."""
+    repeat = max(1, int(repeat))
+    return -(-n // repeat), repeat  # ceil division
+
+
+def _tile_positions(values, repeat, n):
+    """Tile per-position ``values`` across the scenario dimension (block layout: each
+    position's ``repeat`` rows are contiguous), then clip to ``n`` rows."""
+    return np.repeat(values, repeat)[:n] if repeat > 1 else values
+
+
+def _rolling_active(kwargs, tenors=None, probabilities=None, repeat=1):
     """Resolve the active trade for this unit from the injected framework args
-    (date-independent seed). Returns (start_date, book_days, tenor_labels)."""
+    (date-independent seed). Returns (start_date, book_days, tenor_labels).
+
+    ``repeat`` > 1 makes each position span ``repeat`` consecutive rows (a scenario
+    dimension): the schedule is computed for ``ceil(n/repeat)`` positions and each is
+    tiled ``repeat`` times, so a trade recurs across its scenario rows."""
     tenors = list(tenors) if tenors else list(fd.TENORS)
     n = int(kwargs["_number_of_rows_per_batch"])
+    positions, repeat = _rolling_positions(n, repeat)
     start = np.datetime64(kwargs["_start_date"], "D")
     asof = np.datetime64(kwargs["_date"], "D")
     elapsed = int((asof - start).astype("timedelta64[D]").astype("int64"))
     global_seed = kwargs.get("_global_seed", 0)
     batch = int(kwargs.get("_batch_number", 1))
     choices = np.array([_tenor_to_days(t) for t in tenors], dtype="int64")
-    book, idx = _rolling_schedule(n, elapsed, choices, global_seed, batch, probabilities)
+    book, idx = _rolling_schedule(positions, elapsed, choices, global_seed, batch, probabilities)
+    book = _tile_positions(book, repeat, n)
+    idx = _tile_positions(idx, repeat, n)
     return start, book, np.asarray(tenors, dtype=object)[idx]
 
 
@@ -846,16 +866,16 @@ class RollingTradeDate:
             "tenors=[...] / probabilities=[...]."
         )
 
-    def _compute(self, kwargs, tenors, probabilities):
-        start, book, _ = _rolling_active(kwargs, tenors, probabilities)
+    def _compute(self, kwargs, tenors, probabilities, repeat):
+        start, book, _ = _rolling_active(kwargs, tenors, probabilities, repeat)
         return start + book.astype("timedelta64[D]")
 
-    def call(self, _number_of_rows_per_batch: int, tenors=None, probabilities=None, **kwargs):
+    def call(self, _number_of_rows_per_batch: int, tenors=None, probabilities=None, repeat=1, **kwargs):
         kwargs["_number_of_rows_per_batch"] = _number_of_rows_per_batch
-        return self._compute(kwargs, tenors, probabilities)
+        return self._compute(kwargs, tenors, probabilities, repeat)
 
-    def recall(self, input_array=None, tenors=None, probabilities=None, **kwargs):
-        return self._compute(kwargs, tenors, probabilities)
+    def recall(self, input_array=None, tenors=None, probabilities=None, repeat=1, **kwargs):
+        return self._compute(kwargs, tenors, probabilities, repeat)
 
 
 class RollingTenor:
@@ -866,16 +886,16 @@ class RollingTenor:
             "RollingTradeDate / RollingMaturityDate via the shared per-slot schedule."
         )
 
-    def _compute(self, kwargs, tenors, probabilities):
-        _, _, labels = _rolling_active(kwargs, tenors, probabilities)
+    def _compute(self, kwargs, tenors, probabilities, repeat):
+        _, _, labels = _rolling_active(kwargs, tenors, probabilities, repeat)
         return labels
 
-    def call(self, _number_of_rows_per_batch: int, tenors=None, probabilities=None, **kwargs):
+    def call(self, _number_of_rows_per_batch: int, tenors=None, probabilities=None, repeat=1, **kwargs):
         kwargs["_number_of_rows_per_batch"] = _number_of_rows_per_batch
-        return self._compute(kwargs, tenors, probabilities)
+        return self._compute(kwargs, tenors, probabilities, repeat)
 
-    def recall(self, input_array=None, tenors=None, probabilities=None, **kwargs):
-        return self._compute(kwargs, tenors, probabilities)
+    def recall(self, input_array=None, tenors=None, probabilities=None, repeat=1, **kwargs):
+        return self._compute(kwargs, tenors, probabilities, repeat)
 
 
 class RollingMaturityDate:
@@ -926,22 +946,51 @@ class RollingTradeId:
             "rolled slot gets a brand-new id. Reads the (rolling) trade_date column."
         )
 
-    def _compute(self, kwargs, trade_date_column):
+    def _compute(self, kwargs, trade_date_column, repeat):
         n = int(kwargs["_number_of_rows_per_batch"])
+        positions, repeat = _rolling_positions(n, repeat)
         batch = int(kwargs.get("_batch_number", 1))
         book = _column_values(kwargs.get("_table"), trade_date_column)
         if book is None:  # trade_date absent (mis-ordered) -> fall back to the as-of date
             book = np.full(n, np.datetime64(kwargs["_date"], "D"))
         day_offset = (np.asarray(book, dtype="datetime64[D]") - _ROLL_ID_EPOCH).astype("int64")
-        slot_global = batch * n + np.arange(n, dtype="int64")  # unique per (batch, slot)
+        # position index recurs within each scenario block (repeat>1) so a trade keeps
+        # one id across its scenario rows; unique per (batch, position) otherwise.
+        pos = _tile_positions(np.arange(positions, dtype="int64"), repeat, n)
+        slot_global = batch * positions + pos
         return slot_global * _ROLL_ID_DAY_RADIX + day_offset
 
-    def call(self, _number_of_rows_per_batch: int, trade_date_column: str = "trade_date", **kwargs):
+    def call(self, _number_of_rows_per_batch: int, trade_date_column: str = "trade_date", repeat=1, **kwargs):
         kwargs["_number_of_rows_per_batch"] = _number_of_rows_per_batch
-        return self._compute(kwargs, trade_date_column)
+        return self._compute(kwargs, trade_date_column, repeat)
 
-    def recall(self, input_array=None, trade_date_column: str = "trade_date", **kwargs):
-        return self._compute(kwargs, trade_date_column)
+    def recall(self, input_array=None, trade_date_column: str = "trade_date", repeat=1, **kwargs):
+        return self._compute(kwargs, trade_date_column, repeat)
+
+
+class RollingScenario:
+    def __init__(self) -> None:
+        self._generator_description = (
+            "rolling-book scenario dimension: cycles a fixed set of scenario labels within each "
+            "position block (block layout, aligned with the rolling schedule's repeat), so a "
+            "composite key (rolling_trade_id, scenario) is unique while the trade id recurs "
+            "across scenarios. Set list_of_values=[...] to name the scenarios, or count=N."
+        )
+
+    def _compute(self, kwargs, list_of_values, count):
+        n = int(kwargs["_number_of_rows_per_batch"])
+        labels = list(list_of_values) if list_of_values else [f"scenario_{i}" for i in range(max(1, int(count)))]
+        m = len(labels)
+        # row r's scenario == r % m; the schedule generators tile each position m times
+        # (block layout), so each position spans exactly the m distinct scenario labels.
+        return np.asarray(labels, dtype=object)[np.arange(n) % m]
+
+    def call(self, _number_of_rows_per_batch: int, list_of_values=None, count=1, **kwargs):
+        kwargs["_number_of_rows_per_batch"] = _number_of_rows_per_batch
+        return self._compute(kwargs, list_of_values, count)
+
+    def recall(self, input_array=None, list_of_values=None, count=1, **kwargs):
+        return self._compute(kwargs, list_of_values, count)
 
 
 # ── Counterparty identifiers (coherent with the counterparty name) ────────────
