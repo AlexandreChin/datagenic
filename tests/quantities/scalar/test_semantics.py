@@ -13,7 +13,7 @@ falls back to its flat default. The per-category scaling lives in test_43.
 import numpy as np
 import polars as pl
 
-import datagenic.market_finance._data as fd
+import datagenic.domains.market_finance._data as fd
 from datagenic import Configs, Generator
 from datagenic.semantics import (
     SEMANTIC_GENERATORS,

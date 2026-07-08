@@ -9,9 +9,9 @@ numeric priors (notional, PnL series, Greeks…).
 
 Two submodules:
 
-- ``datagenic.market_finance.generators`` — the column generators (same contract
+- ``datagenic.domains.market_finance.generators`` — the column generators (same contract
   as ``datagenic.generators``; draw from the injected ``_rng``).
-- ``datagenic.market_finance._data`` — pure-data vocabularies + numeric priors,
+- ``datagenic.domains.market_finance._data`` — pure-data vocabularies + numeric priors,
   plus the bundled counterparty CSVs under ``data/counterparties/``.
 
 These are wired automatically by ``datagenic.semantics`` when scaffolding with

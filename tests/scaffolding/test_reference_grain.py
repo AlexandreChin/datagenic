@@ -70,7 +70,7 @@ def test_bounded_key_sized_to_its_domain():
         warnings.simplefilter("ignore")  # sole bounded key warns
         cfg = _cfg(ir, reference_rows="auto")
     cur = _table(cfg, "currencies")
-    from datagenic.market_finance import _data as fd
+    from datagenic.domains.market_finance import _data as fd
 
     assert cur["number_of_rows"] == len(fd.CURRENCIES)  # its real domain, not a flat 100
     assert cur["single_batch"] is True and cur["single_date"] is True  # broadcast dim
@@ -130,7 +130,7 @@ def test_bounded_and_free_keys_are_not_equalized():
         ],
     }
     cfg = _cfg(ir, reference_rows="auto", number_of_rows_in_non_fact_tables=100)
-    from datagenic.market_finance import _data as fd
+    from datagenic.domains.market_finance import _data as fd
 
     mix = _table(cfg, "mix")
     assert _card(mix, "ccy") == len(fd.CURRENCIES)  # bounded keeps its domain

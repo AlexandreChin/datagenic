@@ -12,8 +12,8 @@ import datetime
 import numpy as np
 import polars as pl
 
-import datagenic.market_finance._data as fd
-import datagenic.market_finance.generators as gf
+import datagenic.domains.market_finance._data as fd
+import datagenic.domains.market_finance.generators as gf
 from datagenic import Configs, Generator
 from datagenic.semantics import SEMANTIC_GENERATORS, build_generator, heuristic_inferrer
 

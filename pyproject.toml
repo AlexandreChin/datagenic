@@ -49,7 +49,7 @@ dev = [
 include = ["datagenic*", "postprocessors_udfs*"]
 
 [tool.setuptools.package-data]
-"datagenic.market_finance" = ["data/counterparties/*.csv"]
+"datagenic.domains.market_finance" = ["data/counterparties/*.csv"]
 
 [tool.ruff]
 line-length = 100

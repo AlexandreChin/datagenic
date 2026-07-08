@@ -289,7 +289,7 @@ def _load_counterparty_metadata() -> dict[str, dict]:
 
     metadata: dict[str, dict] = {}
     try:
-        data_dir = files("datagenic.market_finance").joinpath("data", "counterparties")
+        data_dir = files("datagenic.domains.market_finance").joinpath("data", "counterparties")
         for entry in sorted(data_dir.iterdir(), key=lambda p: p.name):
             if not entry.name.endswith(".csv"):
                 continue

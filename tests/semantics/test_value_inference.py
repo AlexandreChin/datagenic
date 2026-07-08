@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-import datagenic.market_finance.generators as gf
+import datagenic.domains.market_finance.generators as gf
 from datagenic import Configs
 from datagenic.semantics import values_inferrer
 
