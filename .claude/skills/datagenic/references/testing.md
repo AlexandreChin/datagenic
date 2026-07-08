@@ -4,20 +4,28 @@
 
 ```bash
 uv sync                              # install deps incl. dev + cloud groups
-pytest tests/                        # full suite (numbered tests/test_1..test_32)
-pytest tests/test_2_safety_net.py::test_same_seed_is_byte_identical   # one test
+pytest tests/                        # full suite
+pytest tests/engine/                 # one feature area
+pytest tests/engine/test_determinism.py::test_same_seed_is_byte_identical   # one test
 pytest -m "not integration"          # skip tests needing cloud creds / network
+pytest -m cloud                      # slice by trait marker (also: slow, agent, integration)
 ruff check .                         # lint
 ruff format --check .                # format check (line-length 100, double quotes)
 mypy datagenic                       # type-check (non-strict; targets py3.12)
 ```
 
-`tests/test_*` are numbered by feature/step. The `integration` marker covers tests that need
-network, credentials, or cloud storage — CI runs `-m "not integration"`.
+`tests/` are grouped into **feature directories that mirror the module map**: `engine/`
+(+ `engine/runtime/`), `contracts/`, `scaffolding/`, `semantics/`, `quantities/{scalar,array}/`,
+`market_finance/`, `postprocessors/`, `profiling/`, `scale/`, `storage/`, `packaging/`. Import
+mode is `importlib` (`pytest.ini`), so a basename may recur across directories. `tests/conftest.py`
+puts `tests/golden` on `sys.path` and auto-applies trait markers by path. The `integration` marker
+(explicit) covers tests that need network, credentials, or cloud storage — CI runs
+`-m "not integration"`; `cloud`/`agent`/`slow` are path-derived slices that don't change default
+selection.
 
 ## The golden baseline (determinism guard)
 
-`tests/test_2_safety_net.py::test_golden_manifest_matches` asserts regenerated output against
+`tests/engine/test_determinism.py::test_golden_manifest_matches` asserts regenerated output against
 `tests/golden/baseline_manifest.json`. The fixtures feeding both the capture script and the test
 live in `tests/golden/golden_fixtures.py` (single source of truth). If you **intentionally**
 change generation output, regenerate:
