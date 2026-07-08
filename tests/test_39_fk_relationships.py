@@ -9,9 +9,12 @@ the table stays shardable (KeyEnforcer INPUT_SCOPE='batch').
 import json
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
+import numpy as np
 import polars as pl
+import pytest
 
 from datagenic import Configs, Generator
 from datagenic.postprocessors import KeyEnforcer
@@ -74,6 +77,59 @@ def test_relationship_rules_are_deterministic():
     a = ke.call(_child(300), {"customers": pool}, rules, _unicity_keys=["order_id"], _seed=11)
     b = ke.call(_child(300), {"customers": pool}, rules, _unicity_keys=["order_id"], _seed=11)
     assert a["customer_id"].to_list() == b["customer_id"].to_list()
+
+
+# ── fan-out distribution families (fanout["dist"]) ────────────────────────────
+
+
+def _counts(pool, n, fanout, seed=0):
+    out = KeyEnforcer._fanout_assign(
+        [f"C{i}" for i in range(pool)], n, fanout, np.random.default_rng(seed)
+    )
+    assert len(out) == n
+    assert set(out) <= {f"C{i}" for i in range(pool)}
+    return Counter(out)
+
+
+def test_fanout_default_dist_matches_explicit_uniform():
+    """No ``dist`` key must behave exactly like ``dist="uniform"`` (backward compat)."""
+    pool = [f"C{i}" for i in range(100)]
+    a = KeyEnforcer._fanout_assign(pool, 200, {"min": 1, "max": 5}, np.random.default_rng(3))
+    b = KeyEnforcer._fanout_assign(
+        pool, 200, {"dist": "uniform", "min": 1, "max": 5}, np.random.default_rng(3)
+    )
+    assert a == b
+
+
+def test_fanout_zipf_is_heavy_tailed():
+    # zipf concentrates references on a few parents and leaves a long tail unreferenced,
+    # unlike the flat uniform draw (whose counts cluster tightly around n/pool).
+    zipf = _counts(200, 2000, {"dist": "zipf", "s": 2.0}, seed=2)
+    uniform = _counts(200, 2000, {"dist": "uniform", "min": 1, "max": 5}, seed=2)
+    mean = 2000 / 200
+    assert max(zipf.values()) > 6 * mean  # a whale far above the flat mean
+    assert max(zipf.values()) > 3 * max(uniform.values())  # far heavier tail than uniform
+    # concentration: a handful of parents own most of the references (the "whale" shape)
+    top5 = sum(c for _, c in zipf.most_common(5))
+    assert top5 > 0.5 * 2000
+
+
+def test_fanout_zipf_does_not_over_allocate():
+    """A heavy-tailed draw must not build a multiset far larger than ``n`` (each
+    per-parent count is capped at ``n``)."""
+    counts = _counts(50, 500, {"dist": "zipf", "s": 1.2}, seed=5)
+    assert max(counts.values()) <= 500
+
+
+def test_fanout_zipf_is_deterministic():
+    a = _counts(60, 300, {"dist": "zipf", "s": 2.0}, seed=7)
+    b = _counts(60, 300, {"dist": "zipf", "s": 2.0}, seed=7)
+    assert a == b
+
+
+def test_fanout_unknown_dist_raises():
+    with pytest.raises(ValueError, match="fanout"):
+        KeyEnforcer._fanout_assign(["C0", "C1"], 4, {"dist": "bogus"}, np.random.default_rng(0))
 
 
 def test_fanout_and_null_ignored_on_a_unicity_key():

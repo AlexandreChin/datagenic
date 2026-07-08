@@ -246,7 +246,11 @@ appear **earlier** in the config list (validation enforces this).
 
 `Configs.dump()` builds `default_parameters.postprocessor_args.fk_enforcement` from the IR's
 `foreign_keys`, and wires a `KeyEnforcer` post-processor onto each fact table so its FK columns
-draw only from the referenced table's value pool:
+draw only from the referenced table's value pool. Enforcement is one-directional (the referenced
+dimension is the source of truth; only the fact side is coerced) and fact-only (`foreign_keys` on
+a `referential` table are ignored). It is on by default — pass `Configs(enforce_fk=False)` to skip
+wiring the `KeyEnforcer` (and with it the per-FK `null_rate` / `fanout` hints below), leaving FK
+columns unconstrained:
 
 ```json
 "fk_enforcement": {
@@ -262,13 +266,17 @@ which the scaffolder attaches to the emitted `KeyEnforcer` rule:
 {"column": "customer_id", "references": "customers.id",
  "null_rate": 0.1,                                  // optional FK — 10% null (no orphans otherwise)
  "fanout": {"dist": "uniform", "min": 1, "max": 5}} // each parent referenced ~1..5 times
+// or heavy-tailed: "fanout": {"dist": "zipf", "s": 2.0}  // a few parents own most references
 ```
 
 `KeyEnforcer` applies these to **non-key** FK columns only, from a numpy RNG seeded off the
 postprocessor `_seed` — deterministic and **batch-local**, so the table stays shardable
 (`check-distributable` passes, `INPUT_SCOPE` remains `"batch"`). `fanout` uses target-count
 semantics trimmed/padded to the child row count; the guarantee is per-batch (distributional),
-not a hard global min/max — a global bound needs a `single_batch` table.
+not a hard global min/max — a global bound needs a `single_batch` table. `dist` selects the
+target-count family (default `"uniform"`, `[min, max]`; `"zipf"` with exponent `s` > 1 is
+heavy-tailed). The mean per-parent count is pinned to `child_rows / pool_size` regardless of
+family — `dist` shapes the spread (flat vs concentrated), not the mean.
 
 ## `udf_args` naming convention
 

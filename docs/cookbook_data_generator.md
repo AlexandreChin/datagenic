@@ -426,8 +426,13 @@ Configs(input={
 
 - **`null_rate`** — makes the FK optional: that fraction of child rows get a null
   FK (the rest still draw only from the parent's key pool — no orphans).
-- **`fanout`** — controls multiplicity: each parent is referenced ~`min..max`
-  times (target-count semantics), trimmed/padded to the child row count.
+- **`fanout`** — controls multiplicity via a target-count distribution, trimmed/
+  padded to the child row count. `dist` (default `"uniform"`) picks the family:
+  `"uniform"` references every parent ~`min..max` times (a flat relationship);
+  `"zipf"` (exponent `s` > 1, e.g. `{"dist": "zipf", "s": 2.0}`) is heavy-tailed —
+  a few parents get most of the references, most are referenced once (realistic
+  customer/order concentration). The mean per-parent count is pinned to
+  `child_rows / pool_size` either way; the family shapes the *spread*.
 
 Both are **deterministic and batch-local**, so the table stays shardable
 (`datagenic check-distributable` passes). They apply to **non-key** FK columns
@@ -622,6 +627,8 @@ Ensures FK columns in the fact table draw values exclusively from the referenced
 ```
 
 `Configs.dump()` builds this block automatically from the IR's `foreign_keys` (each fact-table FK becomes a reference into the named referential table's column pool).
+
+Enforcement is one-directional: the referenced (dimension) table is the source of truth and is never modified — only the fact side is coerced to valid values. It is wired onto **fact tables only**; `foreign_keys` on a `referential` table are ignored. Pass `Configs(enforce_fk=False)` (default `True`) to skip wiring the `KeyEnforcer` entirely, leaving FK columns to their default/inferred generators with no cross-table constraint (and disabling the per-FK `null_rate` / `fanout` hints, which ride on the same post-processor).
 
 ### Table entry
 

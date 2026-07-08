@@ -104,10 +104,16 @@ class KeyEnforcer:
           values. Non-key columns only; deterministic and batch-local (shardable).
 
       {"col": "dest", "from": "Table.col", "fanout": {"dist": "uniform", "min": 1, "max": 5}}
-          Control relationship multiplicity: each parent is referenced ~min..max times
-          (target-count semantics), trimmed/padded to the child row count. Per-batch
-          distributional — not a hard global min/max — and batch-local (shardable).
-          Non-key columns only. A true global guarantee needs a single_batch table.
+      {"col": "dest", "from": "Table.col", "fanout": {"dist": "zipf", "s": 2.0}}
+          Control relationship multiplicity via a target-count distribution, trimmed/
+          padded to the child row count. ``dist`` (default "uniform") picks the family:
+          "uniform" references every parent ~min..max times (a flat relationship);
+          "zipf" (exponent ``s`` > 1) is heavy-tailed — a few parents dominate while
+          most are referenced once (models real customer/order concentration). The mean
+          per-parent count is pinned to child_rows / pool_size either way; the family
+          shapes the spread. Per-batch distributional — not a hard global min/max — and
+          batch-local (shardable). Non-key columns only. A true global guarantee needs a
+          single_batch table.
 
     After all rules, duplicate rows are dropped on the unicity keys (if any).
     """
@@ -250,16 +256,41 @@ class KeyEnforcer:
         """Assign each of ``n`` child rows a parent so per-parent child counts follow
         ``fanout`` (target-count semantics).
 
-        Draws a target count per parent from a uniform ``[min, max]``, builds the
-        assignment multiset, then trims (shuffle + head) or pads (draw proportional to
-        the targets) to exactly ``n`` rows. Deterministic via ``rng`` and batch-local,
-        so the per-parent count distribution holds within each batch; across batches it
-        is the sum (a distributional, not hard-global, guarantee).
+        Draws a target count per parent from the family named by ``fanout["dist"]``
+        (default ``"uniform"``), builds the assignment multiset, then trims (shuffle +
+        head) or pads (draw proportional to the targets) to exactly ``n`` rows.
+        Deterministic via ``rng`` and batch-local, so the per-parent count distribution
+        holds within each batch; across batches it is the sum (a distributional, not
+        hard-global, guarantee).
+
+        Supported ``dist`` families:
+
+          ``"uniform"`` (default) — target ~ integer uniform on ``[min, max]``. A flat
+              relationship: every parent is referenced roughly equally.
+          ``"zipf"`` — target ~ Zipf with exponent ``s`` (> 1). A heavy-tailed
+              relationship: a few parents dominate, many are never referenced (models
+              real customer/order concentration).
+
+        Because the multiset is trimmed/padded to exactly ``n``, the mean per-parent
+        count is pinned to ``n / len(pool)`` regardless of family — the family shapes the
+        *spread* (flat vs heavy-tailed), not the mean.
         """
-        lo = max(0, int(fanout.get("min", 1)))
-        hi = max(lo, int(fanout.get("max", lo)))
         parents = np.asarray(pool, dtype=object)
-        counts = rng.integers(lo, hi + 1, size=len(parents))
+        dist = fanout.get("dist", "uniform")
+        if dist == "uniform":
+            lo = max(0, int(fanout.get("min", 1)))
+            hi = max(lo, int(fanout.get("max", lo)))
+            counts = rng.integers(lo, hi + 1, size=len(parents))
+        elif dist == "zipf":
+            counts = rng.zipf(float(fanout.get("s", 2.0)), size=len(parents))
+        else:
+            raise ValueError(
+                f"KeyEnforcer fanout: unknown dist {dist!r} (expected 'uniform' or 'zipf')"
+            )
+        # Cap each target at n: a single parent can never be referenced more than n times,
+        # and an uncapped heavy-tailed draw (zipf) would otherwise build a multiset orders
+        # of magnitude larger than n. No-op for the bounded uniform family.
+        counts = np.minimum(counts, n)
         assignments = np.repeat(parents, counts)
         if len(assignments) >= n:
             rng.shuffle(assignments)
