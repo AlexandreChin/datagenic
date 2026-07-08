@@ -45,6 +45,16 @@ def test_numeric_names_map_to_quantity_semantics():
     assert all(rec["parent"] is None for rec in inferred.values())
 
 
+def test_mtf_scalar_maps_to_pv():
+    # A scalar Mark-to-Future valuation uses the same semantic/generator as pv/mtm.
+    inferred = heuristic_inferrer(
+        "trades",
+        [{"name": "mtf", "type": "float"}, {"name": "mark_to_future", "type": "float"}],
+    )
+    assert inferred["mtf"]["semantic"] == "pv"
+    assert inferred["mark_to_future"]["semantic"] == "pv"
+
+
 def test_numeric_patterns_are_gated_to_float():
     # same names as ints/strings must NOT be matched by the numeric patterns
     columns = [

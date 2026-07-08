@@ -47,6 +47,25 @@ def test_value_scale_matches_row_category():
     assert float(np.median(rates)) / float(np.median(equity)) > 50
 
 
+def test_pv_is_asset_class_conditional_per_unit():
+    # pv/mtm is a per-unit-of-instrument valuation, now conditioned on asset_class
+    # (like notional) rather than a single flat prior.
+    inferred = heuristic_inferrer(
+        "trades",
+        [{"name": "asset_class", "type": "string"}, {"name": "mtm", "type": "float"}],
+    )
+    assert inferred["mtm"]["semantic"] == "pv"
+    assert inferred["mtm"]["parent"] == "asset_class"  # linked to the category column
+
+    spec = build_generator("pv", parent="asset_class")
+    assert spec["udf_name"] == "ConditionalFloats"
+    assert spec["args"]["by_column"] == "asset_class"
+    cases = spec["args"]["cases"]
+    assert {"Equity", "Rates", "FX"} <= set(cases)
+    # per unit of instrument: price-like magnitudes, NOT notional-scale (millions)
+    assert all(c["mu"] < 1.0e4 for c in cases.values())
+
+
 def test_unmapped_category_uses_default():
     parent = np.array(["Commodity"] * 4000)  # not in _CASES
     out = _call(parent, np.random.default_rng(0))

@@ -346,6 +346,19 @@ PAYMENT_FREQUENCIES = ["Annual", "Semi-Annual", "Quarterly", "Monthly", "Zero Co
 DAY_COUNT_CONVENTIONS = ["30/360", "ACT/360", "ACT/365", "ACT/ACT"]
 TRADE_STATUSES = ["New", "Amended", "Live", "Matured", "Cancelled"]
 
+# Collateral types eligible under a CSA (the `eligibleCollateral` field of a
+# credit-support annex), coarsest/most-liquid first.
+COLLATERAL_TYPES = [
+    "Cash",
+    "Government Bonds",
+    "Supranational Bonds",
+    "Corporate Bonds",
+    "Covered Bonds",
+    "Equities",
+    "Money Market Funds",
+    "Gold",
+]
+
 # Clearing houses / CCPs valid for each asset class (coherent with asset_class,
 # like the instrument-type hierarchy). Fallback flattens to all when absent.
 CLEARING_HOUSES_BY_ASSET_CLASS = {
@@ -404,12 +417,8 @@ QUANTITY_PRIORS: dict[str, dict] = {
         "mu": 100.0,
         "sigma": 0.4,
     },
-    "pv": {
-        "generator": "BrownianFloats",
-        "distribution": "lognormal",
-        "mu": 50_000.0,
-        "sigma": 1.0,
-    },
+    # pv / mtm is conditional on asset_class (per unit of instrument) —
+    # see CONDITIONAL_QUANTITY_PRIORS below.
     "rate": {"generator": "RandomFloats", "distribution": "normal", "mu": 0.03, "sigma": 0.01},
     "spread": {"generator": "RandomFloats", "distribution": "normal", "mu": 0.005, "sigma": 0.002},
     "fx_rate": {
@@ -481,6 +490,8 @@ ARRAY_QUANTITY_PRIORS: dict[str, dict] = {
         "size_of_arrays": 10,
         "path": "iid",
     },
+    # Mark-to-Future (mtf) is conditional on asset_class (per unit of instrument) —
+    # see CONDITIONAL_ARRAY_QUANTITY_PRIORS below.
 }
 
 
@@ -507,6 +518,23 @@ CONDITIONAL_QUANTITY_PRIORS: dict[str, dict] = {
         },
         "default": {"distribution": "lognormal", "mu": 1.0e6, "sigma": 1.0},
     },
+    # pv / mtm — a valuation **per unit of instrument** (a price, not a position total),
+    # so magnitudes are price-scale (tens–hundreds), not notional-scale. Still conditioned
+    # on asset_class: an FX unit value ≈ its rate (~1), an equity ≈ its share price (~150),
+    # a bond ≈ ~par (~100). Multiply by the position's units/notional for a book total.
+    "pv": {
+        "parent_semantic": "asset_class",
+        "by_column": "asset_class",
+        "cases": {
+            "Rates": {"distribution": "lognormal", "mu": 100.0, "sigma": 0.15},
+            "Credit": {"distribution": "lognormal", "mu": 98.0, "sigma": 0.3},
+            "Equity": {"distribution": "lognormal", "mu": 150.0, "sigma": 0.6},
+            "FX": {"distribution": "lognormal", "mu": 1.2, "sigma": 0.1},
+            "Commodity": {"distribution": "lognormal", "mu": 70.0, "sigma": 0.7},
+            "Inflation": {"distribution": "lognormal", "mu": 105.0, "sigma": 0.2},
+        },
+        "default": {"distribution": "lognormal", "mu": 100.0, "sigma": 0.4},
+    },
 }
 
 
@@ -532,5 +560,26 @@ CONDITIONAL_ARRAY_QUANTITY_PRIORS: dict[str, dict] = {
             "Inflation": {"distribution": "normal", "mu": 0.0, "sigma": 1.5e5},
         },
         "default": {"distribution": "normal", "mu": 0.0, "sigma": 5.0e4},
+    },
+    # Mark-to-Future (also an array-typed mtm) — the array twin of the conditional scalar
+    # `pv`: a valuation path **per unit of instrument** (price-scale, not notional-scale)
+    # over future points, conditioned on asset_class. A geometric zero-drift Brownian
+    # (path="gbm"): each row anchors at its per-unit level (``mu``) and diffuses with
+    # per-step log-vol ``sigma`` — level-anchored, no ramp, autocorrelated. ``mu`` mirrors
+    # the pv per-unit levels; ``sigma`` here is a *per-step* volatility (small).
+    "mtf": {
+        "parent_semantic": "asset_class",
+        "by_column": "asset_class",
+        "size_of_arrays": 20,
+        "path": "gbm",
+        "cases": {
+            "Rates": {"distribution": "lognormal", "mu": 100.0, "sigma": 0.010},
+            "Credit": {"distribution": "lognormal", "mu": 98.0, "sigma": 0.020},
+            "Equity": {"distribution": "lognormal", "mu": 150.0, "sigma": 0.030},
+            "FX": {"distribution": "lognormal", "mu": 1.2, "sigma": 0.015},
+            "Commodity": {"distribution": "lognormal", "mu": 70.0, "sigma": 0.040},
+            "Inflation": {"distribution": "lognormal", "mu": 105.0, "sigma": 0.012},
+        },
+        "default": {"distribution": "lognormal", "mu": 100.0, "sigma": 0.020},
     },
 }
