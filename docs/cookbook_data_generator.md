@@ -220,7 +220,7 @@ By default a `string` column scaffolds to `prefix_N`-style values. For a recogni
 a financial-markets generator family and an inference layer that wires them
 automatically, **without hand-tagging the IR**.
 
-### The finance generators (`datagenic.market_finance.generators`)
+### The finance generators (`datagenic.domains.market_finance.generators`)
 
 - **Coherent taxonomy** — `FinancialAssetClass` → `FinancialInstrumentType` →
   `FinancialRiskFactorGroup`. The two child generators read the partial row (the
@@ -236,7 +236,7 @@ automatically, **without hand-tagging the IR**.
 - **Org** — `Counterparty`, `TradingBook`, `Desk`.
 
 These are ordinary generators referenced by string in the config, so you can also wire
-one by hand (`"udf_module": "datagenic.market_finance.generators", "udf_name": "Currency"`).
+one by hand (`"udf_module": "datagenic.domains.market_finance.generators", "udf_name": "Currency"`).
 
 ### Realistic numeric quantities (flat and conditional)
 

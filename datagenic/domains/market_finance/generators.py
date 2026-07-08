@@ -27,7 +27,7 @@ import re
 
 import numpy as np
 
-from datagenic.market_finance import _data as fd
+from datagenic.domains.market_finance import _data as fd
 
 
 def _rng_from(kwargs) -> np.random.Generator:

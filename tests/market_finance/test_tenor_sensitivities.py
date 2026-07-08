@@ -10,9 +10,9 @@ nearest grid bucket) is zero — recomputed per as-of date via recall.
 import numpy as np
 import polars as pl
 
-import datagenic.market_finance.generators as gf
+import datagenic.domains.market_finance.generators as gf
 from datagenic import Configs, Generator
-from datagenic.market_finance import _data as fd
+from datagenic.domains.market_finance import _data as fd
 from datagenic.semantics import heuristic_inferrer
 
 _GRID = fd.DEFAULT_TENOR_GRID

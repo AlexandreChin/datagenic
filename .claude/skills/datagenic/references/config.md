@@ -126,7 +126,7 @@ parameters (pre-filled with defaults):
 - **Pin exact values** — most generators accept `list_of_values` + `probabilities`, e.g.
   `"list_of_values": ["EUR","USD","GBP"], "probabilities": [0.5,0.3,0.2]`.
 - **Swap the generator** — change `udf_name` to any built-in in `datagenic.generators` (or
-  `datagenic.market_finance.generators` for realistic financial-markets values) and set its `args`.
+  `datagenic.domains.market_finance.generators` for realistic financial-markets values) and set its `args`.
 - **Use your own** — point `udf_module`/`udf_name` at a custom generator on the PYTHONPATH.
 
 Editing `args`, `seed`, or row counts changes the **config hash**, so a re-run regenerates the
@@ -137,10 +137,10 @@ date range preserves reuse (that's what `extend=True` is for).
 
 Beyond the type-based default generators, the scaffolder can detect a column's **domain
 meaning** and wire a realistic generator automatically — currently financial markets
-(`datagenic.market_finance.generators`). This happens **at scaffold time only**, so the result is a
+(`datagenic.domains.market_finance.generators`). This happens **at scaffold time only**, so the result is a
 normal frozen config; generation determinism is unaffected.
 
-**Finance generators** (`udf_module: "datagenic.market_finance.generators"`):
+**Finance generators** (`udf_module: "datagenic.domains.market_finance.generators"`):
 
 - Coherent hierarchy — `FinancialAssetClass` → `FinancialInstrumentType` /
   `FinancialRiskFactorGroup`. The children read the partial row and sample values valid for
@@ -157,13 +157,13 @@ quantity name map to a distribution-aware generator wired with a book-agnostic p
 - Flat — `notional`, `price`, `quantity`, `rate`, `spread`, `pv`, `fx_rate` →
   `RandomFloats`/`BrownianFloats` with `distribution` (`"lognormal"` for positive,
   right-skewed magnitudes — `mu` is the **median in real units**, `sigma` the log-space
-  spread; `"normal"` otherwise). Priors live in `market_finance._data.QUANTITY_PRIORS`.
+  spread; `"normal"` otherwise). Priors live in `datagenic.domains.market_finance._data.QUANTITY_PRIORS`.
 - Conditional — `notional` maps to the generic `ConditionalFloats`, whose per-row distribution
   depends on a parent category (`by_column`, e.g. `asset_class`): an Equity notional ≈ $100k,
   a Rates notional ≈ tens of millions. It reads the partial `_table` (so the parent must be
   generated first — the scaffolder reorders it) and falls back to `default` when the parent
   column/category is absent. The curated per-category `cases` live in
-  `market_finance._data.CONDITIONAL_QUANTITY_PRIORS`. Gated to **float** columns (ints/strings are
+  `datagenic.domains.market_finance._data.CONDITIONAL_QUANTITY_PRIORS`. Gated to **float** columns (ints/strings are
   never treated as quantities).
 
 The default `distribution="normal"` keeps existing float output byte-identical, so numeric

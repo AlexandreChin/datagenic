@@ -25,7 +25,7 @@ anthropic SDK, lazy-imported only when invoked).
 import importlib
 import re
 
-from datagenic.market_finance._data import (  # pure data, no third-party imports
+from datagenic.domains.market_finance._data import (  # pure data, no third-party imports
     ARRAY_QUANTITY_PRIORS,
     CONDITIONAL_ARRAY_QUANTITY_PRIORS,
     CONDITIONAL_QUANTITY_PRIORS,
@@ -34,29 +34,29 @@ from datagenic.market_finance._data import (  # pure data, no third-party import
 
 # semantic -> (udf_module, udf_class, base_args, parent_arg_name | None)
 SEMANTIC_GENERATORS: dict[str, tuple[str, str, dict, str | None]] = {
-    "asset_class": ("datagenic.market_finance.generators", "FinancialAssetClass", {}, None),
+    "asset_class": ("datagenic.domains.market_finance.generators", "FinancialAssetClass", {}, None),
     "instrument_type": (
-        "datagenic.market_finance.generators",
+        "datagenic.domains.market_finance.generators",
         "FinancialInstrumentType",
         {},
         "asset_class_column",
     ),
     "risk_factor_group": (
-        "datagenic.market_finance.generators",
+        "datagenic.domains.market_finance.generators",
         "FinancialRiskFactorGroup",
         {},
         "asset_class_column",
     ),
-    "currency": ("datagenic.market_finance.generators", "Currency", {}, None),
-    "currency_pair": ("datagenic.market_finance.generators", "CurrencyPair", {}, None),
-    "tenor": ("datagenic.market_finance.generators", "Tenor", {}, None),
-    "credit_rating": ("datagenic.market_finance.generators", "CreditRating", {}, None),
-    "gics_sector": ("datagenic.market_finance.generators", "GICSSector", {}, None),
-    "isin": ("datagenic.market_finance.generators", "ISIN", {}, None),
-    "cusip": ("datagenic.market_finance.generators", "CUSIP", {}, None),
-    "sedol": ("datagenic.market_finance.generators", "SEDOL", {}, None),
+    "currency": ("datagenic.domains.market_finance.generators", "Currency", {}, None),
+    "currency_pair": ("datagenic.domains.market_finance.generators", "CurrencyPair", {}, None),
+    "tenor": ("datagenic.domains.market_finance.generators", "Tenor", {}, None),
+    "credit_rating": ("datagenic.domains.market_finance.generators", "CreditRating", {}, None),
+    "gics_sector": ("datagenic.domains.market_finance.generators", "GICSSector", {}, None),
+    "isin": ("datagenic.domains.market_finance.generators", "ISIN", {}, None),
+    "cusip": ("datagenic.domains.market_finance.generators", "CUSIP", {}, None),
+    "sedol": ("datagenic.domains.market_finance.generators", "SEDOL", {}, None),
     "eligible_collateral": (
-        "datagenic.market_finance.generators",
+        "datagenic.domains.market_finance.generators",
         "EligibleCollateral",
         {},
         None,
@@ -64,91 +64,116 @@ SEMANTIC_GENERATORS: dict[str, tuple[str, str, dict, str | None]] = {
     # generic unique identifiers — the type decides which one is chosen (string vs int).
     "identifier": ("datagenic.generators", "UniqueIncrementalStrings", {"prefix": "ID_"}, None),
     "identifier_int": ("datagenic.generators", "UniqueIncrementalIntegers", {}, None),
-    "instrument_name": ("datagenic.market_finance.generators", "InstrumentName", {}, None),
-    "risk_factor_name": ("datagenic.market_finance.generators", "RiskFactorName", {}, None),
+    "instrument_name": ("datagenic.domains.market_finance.generators", "InstrumentName", {}, None),
+    "risk_factor_name": ("datagenic.domains.market_finance.generators", "RiskFactorName", {}, None),
     # tenor-bucketed sensitivities: a ladder array scaled by asset_class, shaped by
     # instrument_type, and zeroed beyond the remaining maturity (reads maturity_date).
-    "sensi_type": ("datagenic.market_finance.generators", "SensiType", {}, None),
-    "tenor_grid": ("datagenic.market_finance.generators", "TenorGrid", {}, None),
+    "sensi_type": ("datagenic.domains.market_finance.generators", "SensiType", {}, None),
+    "tenor_grid": ("datagenic.domains.market_finance.generators", "TenorGrid", {}, None),
     "tenor_sensitivities": (
-        "datagenic.market_finance.generators",
+        "datagenic.domains.market_finance.generators",
         "TenorSensitivities",
         {},
         "maturity_date_column",
     ),
-    "counterparty": ("datagenic.market_finance.generators", "Counterparty", {}, None),
+    "counterparty": ("datagenic.domains.market_finance.generators", "Counterparty", {}, None),
     "counterparty_sector": (
-        "datagenic.market_finance.generators",
+        "datagenic.domains.market_finance.generators",
         "CounterpartySector",
         {},
         "counterparty_column",
     ),
     "counterparty_country": (
-        "datagenic.market_finance.generators",
+        "datagenic.domains.market_finance.generators",
         "CounterpartyCountry",
         {},
         "counterparty_column",
     ),
     "counterparty_ticker": (
-        "datagenic.market_finance.generators",
+        "datagenic.domains.market_finance.generators",
         "CounterpartyTicker",
         {},
         "counterparty_column",
     ),
     "counterparty_lei": (
-        "datagenic.market_finance.generators",
+        "datagenic.domains.market_finance.generators",
         "CounterpartyLEI",
         {},
         "counterparty_column",
     ),
-    "trading_book": ("datagenic.market_finance.generators", "TradingBook", {}, None),
-    "desk": ("datagenic.market_finance.generators", "Desk", {}, None),
+    "trading_book": ("datagenic.domains.market_finance.generators", "TradingBook", {}, None),
+    "desk": ("datagenic.domains.market_finance.generators", "Desk", {}, None),
     # trade attributes (fixed-vocabulary categoricals)
-    "side": ("datagenic.market_finance.generators", "Side", {}, None),
-    "option_type": ("datagenic.market_finance.generators", "OptionType", {}, None),
-    "exercise_style": ("datagenic.market_finance.generators", "ExerciseStyle", {}, None),
-    "payment_frequency": ("datagenic.market_finance.generators", "PaymentFrequency", {}, None),
-    "day_count_convention": ("datagenic.market_finance.generators", "DayCountConvention", {}, None),
-    "trade_status": ("datagenic.market_finance.generators", "TradeStatus", {}, None),
-    "exchange": ("datagenic.market_finance.generators", "Exchange", {}, None),
+    "side": ("datagenic.domains.market_finance.generators", "Side", {}, None),
+    "option_type": ("datagenic.domains.market_finance.generators", "OptionType", {}, None),
+    "exercise_style": ("datagenic.domains.market_finance.generators", "ExerciseStyle", {}, None),
+    "payment_frequency": (
+        "datagenic.domains.market_finance.generators",
+        "PaymentFrequency",
+        {},
+        None,
+    ),
+    "day_count_convention": (
+        "datagenic.domains.market_finance.generators",
+        "DayCountConvention",
+        {},
+        None,
+    ),
+    "trade_status": ("datagenic.domains.market_finance.generators", "TradeStatus", {}, None),
+    "exchange": ("datagenic.domains.market_finance.generators", "Exchange", {}, None),
     "clearing_house": (
-        "datagenic.market_finance.generators",
+        "datagenic.domains.market_finance.generators",
         "ClearingHouse",
         {},
         "asset_class_column",
     ),
-    "underlying": ("datagenic.market_finance.generators", "Underlying", {}, "asset_class_column"),
+    "underlying": (
+        "datagenic.domains.market_finance.generators",
+        "Underlying",
+        {},
+        "asset_class_column",
+    ),
     # coherent dates
-    "trade_date": ("datagenic.market_finance.generators", "TradeDate", {}, "tenor_column"),
+    "trade_date": ("datagenic.domains.market_finance.generators", "TradeDate", {}, "tenor_column"),
     "maturity_date": (
-        "datagenic.market_finance.generators",
+        "datagenic.domains.market_finance.generators",
         "MaturityDate",
         {},
         "trade_date_column",
     ),
     "settlement_date": (
-        "datagenic.market_finance.generators",
+        "datagenic.domains.market_finance.generators",
         "SettlementDate",
         {},
         "trade_date_column",
     ),
     # rolling book: a constant-size book whose trades roll at maturity (opt-in via
     # Configs(rolling_book=True), which remaps trade_date/tenor/maturity_date/the key).
-    "rolling_trade_date": ("datagenic.market_finance.generators", "RollingTradeDate", {}, None),
-    "rolling_tenor": ("datagenic.market_finance.generators", "RollingTenor", {}, None),
+    "rolling_trade_date": (
+        "datagenic.domains.market_finance.generators",
+        "RollingTradeDate",
+        {},
+        None,
+    ),
+    "rolling_tenor": ("datagenic.domains.market_finance.generators", "RollingTenor", {}, None),
     "rolling_maturity_date": (
-        "datagenic.market_finance.generators",
+        "datagenic.domains.market_finance.generators",
         "RollingMaturityDate",
         {},
         "trade_date_column",
     ),
     "rolling_trade_id": (
-        "datagenic.market_finance.generators",
+        "datagenic.domains.market_finance.generators",
         "RollingTradeId",
         {},
         "trade_date_column",
     ),
-    "rolling_scenario": ("datagenic.market_finance.generators", "RollingScenario", {}, None),
+    "rolling_scenario": (
+        "datagenic.domains.market_finance.generators",
+        "RollingScenario",
+        {},
+        None,
+    ),
 }
 
 # Numeric quantity semantics: a distribution-aware float generator wired with a
@@ -483,8 +508,8 @@ def _build_value_classifiers():
     takes a single string value and returns True if it looks like that semantic."""
     import re as _re
 
-    from datagenic.market_finance import _data as fd
-    from datagenic.market_finance import generators as gf
+    from datagenic.domains.market_finance import _data as fd
+    from datagenic.domains.market_finance import generators as gf
 
     isin_re = _re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
     cusip_re = _re.compile(r"^[A-Z0-9]{8}[0-9]$")
