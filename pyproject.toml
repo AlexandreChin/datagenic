@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "datagenic"
-version = "1.5.0"
+version = "1.6.0"
 description = "datagenic — generic synthetic-data generation: data-model-driven config scaffolding, deterministic large-scale generation, and a unified storage layer (local + cloud)."
 readme = "README.md"
 requires-python = ">=3.12"
