@@ -239,6 +239,18 @@ class Configs:
 
     To scaffold from another schema pass ``adaptor=fn`` where ``fn(source) -> IR`` —
     a small one-time mapper from your source format to the IR.
+
+    **Foreign-key enforcement** (``enforce_fk``, default ``True``). When on, each
+    **fact** table's ``foreign_keys`` are compiled into a ``KeyEnforcer`` post-processor
+    wired onto that table, so its FK columns draw only from the referenced table's value
+    pool (referential integrity — no orphans). Enforcement is one-directional: the
+    reference/dimension table is the source of truth and is never modified; only the
+    fact side is coerced. It applies to fact tables **only** — ``foreign_keys`` declared
+    on a ``referential`` table are ignored (no ``KeyEnforcer`` is wired). Pass
+    ``enforce_fk=False`` to skip wiring entirely, leaving FK columns to their default/
+    inferred generators with no cross-table constraint. Optional per-FK ``null_rate`` /
+    ``fanout`` hints (see the IR ``foreign_keys`` entry) are only honoured when
+    enforcement is on.
     """
 
     @staticmethod
