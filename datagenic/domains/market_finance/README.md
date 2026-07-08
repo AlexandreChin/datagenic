@@ -112,11 +112,20 @@ wire a generator by hand: `{"udf_module": "datagenic.market_finance.generators",
 By default trade attributes are frozen at inception, so a multi-date run is the *same*
 trades observed over time — a short-dated trade booked on the first date has matured by
 later dates. For a **live book** — a constant-size set of positions where matured trades
-drop out and are replaced by freshly-booked ones — scaffold with `rolling_book=True`:
+drop out and are replaced by freshly-booked ones — opt into this module's `rolling_book`
+scaffold transform:
 
 ```python
-Configs(input=ir, semantic_inferrer="heuristic", rolling_book=True).dump(file_path="config.json")
+Configs(
+    input=ir,
+    semantic_inferrer="heuristic",
+    domains={"market_finance": {"transforms": {"rolling_book": {}}}},
+).dump(file_path="config.json")
 ```
+
+(`domains` selects which business modules are active for scaffolding and opts into their
+transforms; omit it to keep all discovered modules active. Pass `{"scenarios": m}` as the
+transform's options to repeat each position across `m` scenario rows.)
 
 Each row is a **slot** running a deterministic renewal process: a trade is booked, matures,
 and the slot immediately re-books a new trade (new tenor, new `trade_id`). At any as-of date
@@ -129,7 +138,7 @@ the slot emits the trade whose `[trade_date, maturity)` interval contains it, so
 - it is **byte-reproducible** across dates, shards and workers — the schedule is a pure
   function of `(global_seed, batch, slot)`, never the as-of date.
 
-`rolling_book=True` remaps the inferred `trade_date` / `tenor` / `maturity_date` and the single
+The `rolling_book` transform remaps the inferred `trade_date` / `tenor` / `maturity_date` and the single
 unicity key to `RollingTradeDate` / `RollingTenor` / `RollingMaturityDate` / `RollingTradeId`
 (so it needs an inferrer). Bias toward short maturities via those generators' `tenors=[...]` /
 `probabilities=[...]` args. `trade_id` is emitted as a packed int; the key sort is skipped

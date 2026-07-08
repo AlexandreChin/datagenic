@@ -13,7 +13,8 @@ from typing import Any
 
 import datagenic.iokit.func as func
 from datagenic import generators
-from datagenic.semantics import SEMANTIC_GENERATORS, build_generator, resolve_inferrer
+from datagenic.semantics import build_generator, resolve_inferrer
+from datagenic.semantics_registry import REGISTRY, ScaffoldContext
 
 
 class Columns:
@@ -348,8 +349,7 @@ class Configs:
         adaptor: Callable[[dict], dict] | None = None,
         semantic_inferrer=None,
         samples=None,
-        rolling_book: bool = False,
-        rolling_scenarios: int = 1,
+        domains: dict | None = None,
         reference_rows: str | int | None = None,
     ):
         # Load the source (dict, JSON path, or a plain string → empty IR), then run
@@ -376,16 +376,19 @@ class Configs:
         # generator automatically, so the user need not hand-tag the IR. The
         # resulting config is fully hand-editable; see _inferred annotations.
         # ``samples`` (optional) lets a value-based inferrer read real values.
-        self._inferrer = resolve_inferrer(semantic_inferrer)
+        # Module selection (``domains``): scope inference to a chosen subset of domain
+        # packs and opt into their scaffold transforms. ``None`` = all discovered packs,
+        # no transforms (backward-compatible). See _parse_domains.
+        self._active, self._domain_transforms = self._parse_domains(domains)
+        self._inferrer = resolve_inferrer(semantic_inferrer, active=self._active)
         self._sample_data = self._normalize_samples(samples)
-        self.rolling_book = rolling_book
         self.reference_rows = reference_rows
         self._needs_unique_by_construction = False
-        self.rolling_scenarios = rolling_scenarios
         self._semantics: dict = {}
         self._compute_semantics()
-        if self.rolling_book:
-            self._apply_rolling_book()
+        # Post-inference domain transforms (e.g. market_finance rolling_book) may rewrite
+        # the inferred semantics and contribute default-parameter overrides.
+        self._default_param_overrides = self._run_scaffold_transforms()
         # per-(fact, fk-column) KeyEnforcer rule options (null_rate / fanout) from the IR
         self._fk_options = self._compute_fk_options()
 
@@ -420,11 +423,10 @@ class Configs:
             "tables": [],
         }
 
-        # Rolling-book generators key off row index == slot; the post-generation key
-        # sort would scramble that mapping across dates (recall regenerates row by row),
-        # so skip it. Row *order* changes only; the row set and key uniqueness do not.
-        if self.rolling_book:
-            self.config_template["default_parameters"]["scale_skip_global_key_sort"] = True
+        # Default-parameter overrides contributed by domain scaffold transforms (e.g.
+        # rolling_book sets scale_skip_global_key_sort: its generators key off row index
+        # == slot, and the post-generation key sort would scramble that across dates).
+        self.config_template["default_parameters"].update(self._default_param_overrides)
 
         # external ziptables
         for table in self._internal_model["tables"]["zip"]["external"]:
@@ -760,8 +762,59 @@ class Configs:
                         "alternatives": [],
                         "by": "explicit",
                     }
-                if rec and rec["semantic"] in SEMANTIC_GENERATORS:
+                if rec and REGISTRY.generator_for(rec["semantic"], self._active) is not None:
                     self._semantics[(tname, col["name"])] = rec
+
+    def _parse_domains(self, domains):
+        """Resolve the ``domains`` selection into an active-module scope and the set of
+        scaffold transforms to run.
+
+        ``domains`` is a dict ``{module_name: {"transforms": {name: options}}}`` or
+        ``None``. ``None`` (omitted) = all discovered packs active, no transforms
+        (backward-compatible). ``{}`` (explicit empty) = core generics only. A module's
+        options dict accepts only the ``transforms`` key, and each transform must be one
+        the module registered. Returns ``(active, transforms)`` where ``active`` is the
+        module-name set (``None`` = all) and ``transforms`` is ``{name: options}``.
+        """
+        if domains is None:
+            return None, {}
+        if not isinstance(domains, dict):
+            raise TypeError(
+                f"domains must be a dict of {{module: {{...}}}} or None, got "
+                f"{type(domains).__name__}"
+            )
+        discovered = REGISTRY.discovered_domains()
+        transforms: dict[str, dict] = {}
+        for name, opts in domains.items():
+            if name not in discovered:
+                raise ValueError(f"unknown domain {name!r}; discovered packs: {sorted(discovered)}")
+            opts = opts or {}
+            unknown = set(opts) - {"transforms"}
+            if unknown:
+                raise ValueError(
+                    f"unknown key(s) {sorted(unknown)} for domain {name!r}; "
+                    f"only 'transforms' is supported"
+                )
+            owned = REGISTRY.transforms_for_domain(name)
+            for tname, topts in (opts.get("transforms") or {}).items():
+                if tname not in owned:
+                    raise ValueError(
+                        f"domain {name!r} has no transform {tname!r}; it registers: {sorted(owned)}"
+                    )
+                transforms[tname] = dict(topts or {})
+        return set(domains), transforms
+
+    def _run_scaffold_transforms(self) -> dict:
+        """Run each opted-in domain transform over a shared ``ScaffoldContext`` (after
+        inference). Transforms rewrite ``self._semantics`` in place and may contribute
+        default-parameter overrides, which are returned to fold into config_template."""
+        if not self._domain_transforms:
+            return {}
+        ctx = ScaffoldContext(ir=self._ir, semantics=self._semantics)
+        for name, options in self._domain_transforms.items():
+            fn = REGISTRY.scaffold_transform(name, active=self._active)
+            fn(ctx, **options)
+        return ctx.default_parameters
 
     @staticmethod
     def _key_cardinality(temp_col: dict):
@@ -851,91 +904,6 @@ class Configs:
                 stacklevel=2,
             )
 
-    def _apply_rolling_book(self) -> None:
-        """Turn every trade table into a rolling book: remap the inferred trade_date /
-        tenor / maturity_date semantics to their Rolling* equivalents and map the single
-        unicity key to a rolling trade id. Requires an inferrer (heuristic) to have tagged
-        those columns. On each date the book is a constant-size set of live trades; matured
-        trades roll to freshly-booked ones with new ids. See RollingTradeDate & co."""
-        remap = {
-            "trade_date": "rolling_trade_date",
-            "tenor": "rolling_tenor",
-            "maturity_date": "rolling_maturity_date",
-        }
-        for table in self._ir["tables"]:
-            tname = table["name"]
-            # the column carrying the (rolling) trade date, used as the coherence parent
-            trade_date_col = next(
-                (
-                    c["name"]
-                    for c in table["columns"]
-                    if self._semantics.get((tname, c["name"]), {}).get("semantic") == "trade_date"
-                ),
-                None,
-            )
-            if trade_date_col is None:  # not a trade table (or inference is off) -> leave it
-                continue
-            for col in table["columns"]:
-                rec = self._semantics.get((tname, col["name"]))
-                if rec and rec["semantic"] in remap:
-                    rec["semantic"] = remap[rec["semantic"]]
-                    rec["by"] = "rolling_book"
-                    # trade_date & tenor are schedule roots; maturity reads trade_date
-                    rec["parent"] = (
-                        trade_date_col if rec["semantic"] == "rolling_maturity_date" else None
-                    )
-            # The book's identity is a per-slot trade id that rolls (new id on each
-            # roll). Support composite keys, not just a single key: map an id-like key
-            # column (or the first key that isn't a rolling-schedule column) to
-            # rolling_trade_id. It is unique per slot, so the composite key tuple is
-            # unique BY CONSTRUCTION -> the engine's per-unit dedup is a no-op and the
-            # book keeps its constant size (a shrunk frame would desync recall()).
-            keys = table.get("keys", [])
-            schedule_cols = {trade_date_col} | {
-                c["name"]
-                for c in table["columns"]
-                if self._semantics.get((tname, c["name"]), {}).get("semantic")
-                in ("rolling_tenor", "rolling_maturity_date")
-            }
-            free_keys = [k for k in keys if k not in schedule_cols]
-            id_key = next(
-                (k for k in free_keys if k.lower().endswith("id") or "ref" in k.lower()),
-                free_keys[0] if free_keys else None,
-            )
-            scenario_keys = [k for k in free_keys if k != id_key]
-
-            # Scenario dimension (rolling_scenarios=m): repeat each position across m
-            # scenario rows so the trade id recurs while (rolling_trade_id, scenario)
-            # stays unique. Needs exactly one non-id key to carry the scenario labels;
-            # otherwise fall back to one row per position (m == 1).
-            m = max(1, int(getattr(self, "rolling_scenarios", 1) or 1))
-            if m > 1 and len(scenario_keys) != 1:
-                m = 1
-            if m > 1:
-                # tile the schedule roots across the scenario rows (maturity reads the
-                # tiled trade_date/tenor from the frame, so it needs no repeat itself)
-                for col in table["columns"]:
-                    rec = self._semantics.get((tname, col["name"]))
-                    if rec and rec.get("semantic") in ("rolling_trade_date", "rolling_tenor"):
-                        rec["args"] = {**rec.get("args", {}), "repeat": m}
-                self._semantics[(tname, scenario_keys[0])] = {
-                    "semantic": "rolling_scenario",
-                    "confidence": 1.0,
-                    "parent": None,
-                    "alternatives": [],
-                    "by": "rolling_book",
-                    "args": {"count": m},
-                }
-            if id_key is not None:
-                self._semantics[(tname, id_key)] = {
-                    "semantic": "rolling_trade_id",
-                    "confidence": 1.0,
-                    "parent": trade_date_col,
-                    "alternatives": [],
-                    "by": "rolling_book",
-                    "args": {"repeat": m} if m > 1 else {},
-                }
-
     def _apply_semantic(self, temp_col: dict, table_name: str) -> None:
         """Override a column's generator with the one inferred for its semantic,
         recording the inference under ``_inferred`` for manual review/fine-tuning.
@@ -944,7 +912,7 @@ class Configs:
         rec = self._semantics.get((table_name, temp_col["col_name"]))
         if not rec:
             return
-        cg = build_generator(rec["semantic"], rec.get("parent"), rec.get("args"))
+        cg = build_generator(rec["semantic"], rec.get("parent"), rec.get("args"), self._active)
         cg["description"] = (
             f"inferred semantic '{rec['semantic']}' "
             f"(confidence {rec['confidence']:.2f}, by {rec['by']})"

@@ -23,13 +23,10 @@ import json
 import os
 
 from datagenic.semantics import (
-    ARRAY_QUANTITY_PRIORS,
-    CONDITIONAL_ARRAY_QUANTITY_PRIORS,
-    CONDITIONAL_QUANTITY_PRIORS,
-    QUANTITY_PRIORS,
     SEMANTIC_GENERATORS,
     _link_hierarchy_parents,
 )
+from datagenic.semantics_registry import REGISTRY
 
 # Short catalog descriptions shown to the model (one line per semantic).
 _SEMANTIC_DESCRIPTIONS = {
@@ -68,9 +65,12 @@ _NONE = "none"  # the model's choice when no catalog entry fits
 _NO_DIST = "none"  # distribution sentinel: no numeric proposal for this column
 
 # numeric semantics for which a distribution proposal is meaningful
-_ARRAY_SEMANTICS = set(ARRAY_QUANTITY_PRIORS) | set(CONDITIONAL_ARRAY_QUANTITY_PRIORS)
-_CONDITIONAL_SEMANTICS = set(CONDITIONAL_QUANTITY_PRIORS) | set(CONDITIONAL_ARRAY_QUANTITY_PRIORS)
-_NUMERIC_SEMANTICS = set(QUANTITY_PRIORS) | _CONDITIONAL_SEMANTICS | _ARRAY_SEMANTICS
+# Numeric-semantic groupings derived from the registry's fit-kinds (no domain priors).
+_NUMERIC_SEMANTICS = set(REGISTRY.numeric_kinds)
+_ARRAY_SEMANTICS = {s for s, k in REGISTRY.numeric_kinds.items() if k.startswith("array")}
+_CONDITIONAL_SEMANTICS = {
+    s for s, k in REGISTRY.numeric_kinds.items() if k.endswith("_conditional")
+}
 
 _SYSTEM = (
     "You label database columns with a finance-domain semantic so a synthetic-data "

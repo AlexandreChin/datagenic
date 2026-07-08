@@ -17,4 +17,12 @@ Two submodules:
 These are wired automatically by ``datagenic.semantics`` when scaffolding with
 ``--infer-semantics``. Kept as a subpackage so nothing here is imported by a bare
 ``import datagenic`` (no numpy pulled). See ``README.md`` for the full field list.
+
+``register(registry)`` is the discovery hook the semantic registry calls to add this
+pack's semantics/patterns/links/classifiers; importing it stays numpy-free (only
+literals + the pure-data priors), so discovery does not pull the generators.
 """
+
+from datagenic.domains.market_finance._semantics import register
+
+__all__ = ["register"]
