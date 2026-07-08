@@ -153,7 +153,7 @@ def _rolling_config(out, *, batches=1):
         end_date="2024-01-05",
         seed=3,
         semantic_inferrer="heuristic",
-        rolling_book=True,
+        domains={"market_finance": {"transforms": {"rolling_book": {}}}},
     ).config_template
 
 
@@ -214,7 +214,7 @@ def test_composite_key_rolling_book(tmp_path):
         end_date="2024-01-05",
         seed=3,
         semantic_inferrer="heuristic",
-        rolling_book=True,
+        domains={"market_finance": {"transforms": {"rolling_book": {}}}},
     ).config_template
     gens = {c["col_name"]: c["column_generator"]["udf_name"] for c in cfg["tables"][0]["columns"]}
     assert gens["trade_id"] == "RollingTradeId"  # the id-like key rolls, even in a composite key
@@ -229,7 +229,7 @@ def test_composite_key_rolling_book(tmp_path):
 
 
 def test_scenario_expansion_repeats_trade_id_across_scenarios(tmp_path):
-    """rolling_scenarios=m repeats each position across m scenario rows: the trade id
+    """the rolling_book scenarios=m option repeats each position across m scenario rows: the trade id
     recurs (so the composite key is genuinely composite) while (rolling_trade_id, scenario)
     stays unique, and a trade's schedule is identical across its scenario rows."""
     import math
@@ -248,8 +248,7 @@ def test_scenario_expansion_repeats_trade_id_across_scenarios(tmp_path):
         end_date="2024-01-04",
         seed=3,
         semantic_inferrer="heuristic",
-        rolling_book=True,
-        rolling_scenarios=5,
+        domains={"market_finance": {"transforms": {"rolling_book": {"scenarios": 5}}}},
     ).config_template
     gens = {c["col_name"]: c["column_generator"]["udf_name"] for c in cfg["tables"][0]["columns"]}
     assert gens["trade_id"] == "RollingTradeId"

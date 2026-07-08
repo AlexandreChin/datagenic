@@ -2,10 +2,17 @@
 scaffolder can wire a realistic generator automatically, without the user
 hand-tagging the IR.
 
+This module is **domain-agnostic**: it names no specific domain. All domain content
+(semantic → generator mappings, name patterns, coherence links, value classifiers)
+is contributed by domain packs under ``datagenic/domains/*`` through
+``datagenic.semantics_registry`` — discovered and loaded once at import here. Adding a
+new domain is dropping a folder with a ``register(registry)`` hook; no change to this
+module.
+
 This runs at scaffold time only (``Configs``), so it is *not* subject to the
-byte-identical generation invariant — the inference produces a config that the
-user then reviews and may hand-edit; generation from the frozen config stays
-deterministic regardless.
+byte-identical generation invariant — the inference produces a config that the user
+then reviews and may hand-edit; generation from the frozen config stays deterministic
+regardless.
 
 Inferrer contract::
 
@@ -22,358 +29,23 @@ fallback) and ``agent`` (opt-in LLM via ``datagenic.semantics_agent``; needs the
 anthropic SDK, lazy-imported only when invoked).
 """
 
+import functools
 import importlib
-import re
 
-from datagenic.domains.market_finance._data import (  # pure data, no third-party imports
-    ARRAY_QUANTITY_PRIORS,
-    CONDITIONAL_ARRAY_QUANTITY_PRIORS,
-    CONDITIONAL_QUANTITY_PRIORS,
-    QUANTITY_PRIORS,
-)
+from datagenic.semantics_registry import REGISTRY
 
-# semantic -> (udf_module, udf_class, base_args, parent_arg_name | None)
-SEMANTIC_GENERATORS: dict[str, tuple[str, str, dict, str | None]] = {
-    "asset_class": ("datagenic.domains.market_finance.generators", "FinancialAssetClass", {}, None),
-    "instrument_type": (
-        "datagenic.domains.market_finance.generators",
-        "FinancialInstrumentType",
-        {},
-        "asset_class_column",
-    ),
-    "risk_factor_group": (
-        "datagenic.domains.market_finance.generators",
-        "FinancialRiskFactorGroup",
-        {},
-        "asset_class_column",
-    ),
-    "currency": ("datagenic.domains.market_finance.generators", "Currency", {}, None),
-    "currency_pair": ("datagenic.domains.market_finance.generators", "CurrencyPair", {}, None),
-    "tenor": ("datagenic.domains.market_finance.generators", "Tenor", {}, None),
-    "credit_rating": ("datagenic.domains.market_finance.generators", "CreditRating", {}, None),
-    "gics_sector": ("datagenic.domains.market_finance.generators", "GICSSector", {}, None),
-    "isin": ("datagenic.domains.market_finance.generators", "ISIN", {}, None),
-    "cusip": ("datagenic.domains.market_finance.generators", "CUSIP", {}, None),
-    "sedol": ("datagenic.domains.market_finance.generators", "SEDOL", {}, None),
-    "eligible_collateral": (
-        "datagenic.domains.market_finance.generators",
-        "EligibleCollateral",
-        {},
-        None,
-    ),
-    # generic unique identifiers — the type decides which one is chosen (string vs int).
-    "identifier": ("datagenic.generators", "UniqueIncrementalStrings", {"prefix": "ID_"}, None),
-    "identifier_int": ("datagenic.generators", "UniqueIncrementalIntegers", {}, None),
-    "instrument_name": ("datagenic.domains.market_finance.generators", "InstrumentName", {}, None),
-    "risk_factor_name": ("datagenic.domains.market_finance.generators", "RiskFactorName", {}, None),
-    # tenor-bucketed sensitivities: a ladder array scaled by asset_class, shaped by
-    # instrument_type, and zeroed beyond the remaining maturity (reads maturity_date).
-    "sensi_type": ("datagenic.domains.market_finance.generators", "SensiType", {}, None),
-    "tenor_grid": ("datagenic.domains.market_finance.generators", "TenorGrid", {}, None),
-    "tenor_sensitivities": (
-        "datagenic.domains.market_finance.generators",
-        "TenorSensitivities",
-        {},
-        "maturity_date_column",
-    ),
-    "counterparty": ("datagenic.domains.market_finance.generators", "Counterparty", {}, None),
-    "counterparty_sector": (
-        "datagenic.domains.market_finance.generators",
-        "CounterpartySector",
-        {},
-        "counterparty_column",
-    ),
-    "counterparty_country": (
-        "datagenic.domains.market_finance.generators",
-        "CounterpartyCountry",
-        {},
-        "counterparty_column",
-    ),
-    "counterparty_ticker": (
-        "datagenic.domains.market_finance.generators",
-        "CounterpartyTicker",
-        {},
-        "counterparty_column",
-    ),
-    "counterparty_lei": (
-        "datagenic.domains.market_finance.generators",
-        "CounterpartyLEI",
-        {},
-        "counterparty_column",
-    ),
-    "trading_book": ("datagenic.domains.market_finance.generators", "TradingBook", {}, None),
-    "desk": ("datagenic.domains.market_finance.generators", "Desk", {}, None),
-    # trade attributes (fixed-vocabulary categoricals)
-    "side": ("datagenic.domains.market_finance.generators", "Side", {}, None),
-    "option_type": ("datagenic.domains.market_finance.generators", "OptionType", {}, None),
-    "exercise_style": ("datagenic.domains.market_finance.generators", "ExerciseStyle", {}, None),
-    "payment_frequency": (
-        "datagenic.domains.market_finance.generators",
-        "PaymentFrequency",
-        {},
-        None,
-    ),
-    "day_count_convention": (
-        "datagenic.domains.market_finance.generators",
-        "DayCountConvention",
-        {},
-        None,
-    ),
-    "trade_status": ("datagenic.domains.market_finance.generators", "TradeStatus", {}, None),
-    "exchange": ("datagenic.domains.market_finance.generators", "Exchange", {}, None),
-    "clearing_house": (
-        "datagenic.domains.market_finance.generators",
-        "ClearingHouse",
-        {},
-        "asset_class_column",
-    ),
-    "underlying": (
-        "datagenic.domains.market_finance.generators",
-        "Underlying",
-        {},
-        "asset_class_column",
-    ),
-    # coherent dates
-    "trade_date": ("datagenic.domains.market_finance.generators", "TradeDate", {}, "tenor_column"),
-    "maturity_date": (
-        "datagenic.domains.market_finance.generators",
-        "MaturityDate",
-        {},
-        "trade_date_column",
-    ),
-    "settlement_date": (
-        "datagenic.domains.market_finance.generators",
-        "SettlementDate",
-        {},
-        "trade_date_column",
-    ),
-    # rolling book: a constant-size book whose trades roll at maturity (opt-in via
-    # Configs(rolling_book=True), which remaps trade_date/tenor/maturity_date/the key).
-    "rolling_trade_date": (
-        "datagenic.domains.market_finance.generators",
-        "RollingTradeDate",
-        {},
-        None,
-    ),
-    "rolling_tenor": ("datagenic.domains.market_finance.generators", "RollingTenor", {}, None),
-    "rolling_maturity_date": (
-        "datagenic.domains.market_finance.generators",
-        "RollingMaturityDate",
-        {},
-        "trade_date_column",
-    ),
-    "rolling_trade_id": (
-        "datagenic.domains.market_finance.generators",
-        "RollingTradeId",
-        {},
-        "trade_date_column",
-    ),
-    "rolling_scenario": (
-        "datagenic.domains.market_finance.generators",
-        "RollingScenario",
-        {},
-        None,
-    ),
-}
+# Populate the registry once (core generics + discovered domain packs). Registration
+# records only strings/patterns and each pack's pure data, so this stays numpy-free —
+# domain generator classes are imported later, only when build_generator builds one.
+REGISTRY.load()
 
-# Numeric quantity semantics: a distribution-aware float generator wired with a
-# book-agnostic prior (real-unit median/spread + family) so magnitudes are
-# plausible out of the box. Flat (no parent) in this phase.
-for _semantic, _prior in QUANTITY_PRIORS.items():
-    SEMANTIC_GENERATORS[_semantic] = (
-        "datagenic.generators",
-        _prior["generator"],
-        {"mu": _prior["mu"], "sigma": _prior["sigma"], "distribution": _prior["distribution"]},
-        None,
-    )
-
-# Conditional numeric semantics: a value whose distribution depends on a parent
-# category (e.g. notional scaled by asset_class). Maps to ConditionalFloats with
-# the parent column wired into `by_column`; the case/default priors are the base
-# args. Falls back to `default` at runtime when the parent column is absent.
-for _semantic, _prior in CONDITIONAL_QUANTITY_PRIORS.items():
-    SEMANTIC_GENERATORS[_semantic] = (
-        "datagenic.generators",
-        "ConditionalFloats",
-        {"cases": _prior["cases"], "default": _prior["default"]},
-        "by_column",
-    )
-
-# Array-typed quantity semantics: a distribution-aware array generator wired with
-# a book-agnostic prior (family + real-unit params + array length + path). Flat
-# (no parent) in this phase. Applied only to array(float) columns (see the gate).
-for _semantic, _prior in ARRAY_QUANTITY_PRIORS.items():
-    SEMANTIC_GENERATORS[_semantic] = (
-        "datagenic.generators",
-        _prior["generator"],
-        {k: v for k, v in _prior.items() if k != "generator"},
-        None,
-    )
-
-# Conditional array-quantity semantics: a per-row array whose distribution depends
-# on a parent category (e.g. a PnL series whose vol depends on asset_class). Maps to
-# ConditionalArrayFloats with the parent wired into `by_column`; size_of_arrays/path
-# and the case/default priors are the base args.
-for _semantic, _prior in CONDITIONAL_ARRAY_QUANTITY_PRIORS.items():
-    SEMANTIC_GENERATORS[_semantic] = (
-        "datagenic.generators",
-        "ConditionalArrayFloats",
-        {k: v for k, v in _prior.items() if k not in ("parent_semantic", "by_column")},
-        "by_column",
-    )
-
-# Categorical semantics made coherent by reading the asset_class column.
-_HIERARCHY_CHILDREN = ("instrument_type", "risk_factor_group", "clearing_house", "underlying")
-
-# Counterparty attributes that must stay coherent with the row's counterparty column.
-_COUNTERPARTY_CHILDREN = (
-    "counterparty_sector",
-    "counterparty_country",
-    "counterparty_ticker",
-    "counterparty_lei",
-)
-
-# Dates derived from the row's trade_date (maturity = trade_date + tenor; settlement = +lag).
-_TRADE_DATE_CHILDREN = ("maturity_date", "settlement_date")
-
-# A sensitivity ladder reads the row's maturity_date (to zero buckets beyond it), so it
-# must be generated after maturity_date (and hence after asset_class / instrument_type).
-_MATURITY_CHILDREN = ("tenor_sensitivities",)
-
-# trade_date reads the row's tenor so its age is bounded by that tenor — every trade
-# is live at the as-of date (maturity = trade_date + tenor >= as-of). Ordering the tenor
-# column before trade_date (before maturity_date) is what the coherence sort resolves.
-_TENOR_CHILDREN = ("trade_date",)
-
-# Conditional (scalar or array) numeric semantics that condition on the asset_class
-# column, linked to it the same way the categorical hierarchy children are.
-_ASSET_CLASS_CONDITIONAL = tuple(
-    sem
-    for sem, prior in {**CONDITIONAL_QUANTITY_PRIORS, **CONDITIONAL_ARRAY_QUANTITY_PRIORS}.items()
-    if prior.get("parent_semantic") == "asset_class"
-)
-
-# Ordered (specific first) name patterns -> (semantic, confidence). The first
-# matching pattern wins, so e.g. currency_pair is tested before currency.
-_PATTERNS: list[tuple[str, str, float]] = [
-    (r"isin", "isin", 0.97),
-    (r"cusip", "cusip", 0.97),
-    (r"sedol", "sedol", 0.97),
-    # eligible collateral (CSA field); matches the correct spelling and the common
-    # "elligible" typo — `l+` covers one or two l's, prefix optional so bare
-    # "collateral" also matches. String-gated, so a numeric collateral value is skipped.
-    (r"(el+igible[_ ]?)?collateral", "eligible_collateral", 0.85),
-    # a product identifier (string here; the int case is handled by the int pattern set).
-    (r"product[_ ]?id|prod[_ ]?id", "identifier", 0.8),
-    (r"(currency|ccy|fx)[_ ]?pair", "currency_pair", 0.9),
-    (r"risk[_ ]?factor[_ ]?(group|class)|rf[_ ]?group|riskfactorgroup", "risk_factor_group", 0.9),
-    (r"risk[_ ]?factor[_ ]?name|rf[_ ]?name", "risk_factor_name", 0.85),
-    (r"sensi[_ ]?type|greek[_ ]?type|risk[_ ]?measure", "sensi_type", 0.9),
-    (r"instrument[_ ]?type|instr[_ ]?type|product[_ ]?type", "instrument_type", 0.9),
-    (r"instrument[_ ]?name|security[_ ]?name|instr[_ ]?name", "instrument_name", 0.85),
-    (r"asset[_ ]?class|assetclass|asset[_ ]?cls", "asset_class", 0.9),
-    (r"credit[_ ]?rating|^rating$|\brating\b", "credit_rating", 0.8),
-    # counterparty attributes — tested before both the generic `sector` pattern and the
-    # plain `counterparty` pattern (which would otherwise swallow "counterparty_sector").
-    (r"(counterparty|cpty|ctp)[_ ]?sector", "counterparty_sector", 0.9),
-    (r"(counterparty|cpty|ctp)[_ ]?(country|domicile|nationality)", "counterparty_country", 0.9),
-    (r"(counterparty|cpty|ctp)[_ ]?ticker|^ticker$|\bticker\b|symbol", "counterparty_ticker", 0.85),
-    (r"\blei\b|legal[_ ]?entity[_ ]?id", "counterparty_lei", 0.9),
-    (r"gics|^sector$|\bsector\b|industry", "gics_sector", 0.75),
-    (r"counterparty|^ctp$|^cpty$|legal[_ ]?entity", "counterparty", 0.8),
-    (r"trading[_ ]?book|^book$|portfolio", "trading_book", 0.7),
-    (r"^desk$|\bdesk\b", "desk", 0.8),
-    # trade attributes
-    (r"^side$|buy[_ ]?sell|\bdirection\b|long[_ ]?short", "side", 0.85),
-    (r"option[_ ]?type|call[_ ]?put|put[_ ]?call", "option_type", 0.85),
-    (r"exercise[_ ]?(style|type)", "exercise_style", 0.85),
-    (r"payment[_ ]?freq|coupon[_ ]?freq|pay[_ ]?freq|\bfrequency\b", "payment_frequency", 0.8),
-    (r"day[_ ]?count|daycount|\bdcc\b", "day_count_convention", 0.85),
-    (r"trade[_ ]?status|^status$|lifecycle", "trade_status", 0.8),
-    (r"clearing[_ ]?house|\bccp\b|clearer|clearing[_ ]?broker", "clearing_house", 0.85),
-    (r"exchange|\bvenue\b|\bmic\b|listing", "exchange", 0.75),
-    (r"underlying|underlier|reference[_ ]?(entity|name)", "underlying", 0.85),
-    (r"tenor|maturity|^term$", "tenor", 0.8),
-    (r"^ccy$|^cur$|currency|ccy[_ ]?code", "currency", 0.85),
-]
-_COMPILED = [(re.compile(p, re.IGNORECASE), sem, conf) for p, sem, conf in _PATTERNS]
-
-# Numeric quantity name patterns (specific first) -> (semantic, confidence).
-# Gated to float-typed columns, so ids/counts (ints) and categoricals (strings)
-# are never matched. fx_rate is tested before rate; pv before price.
-_NUMERIC_PATTERNS: list[tuple[str, str, float]] = [
-    (r"notional|principal|face[_ ]?(value|amount|amt)?", "notional", 0.8),
-    (r"fx[_ ]?rate|spot[_ ]?rate|exchange[_ ]?rate", "fx_rate", 0.85),
-    (r"spread", "spread", 0.8),
-    (
-        r"\bpv\b|\bnpv\b|\bmtm\b|\bmtf\b|present[_ ]?value|"
-        r"mark[_ ]?to[_ ]?(market|future)|market[_ ]?value",
-        "pv",
-        0.75,
-    ),
-    (r"price|^px$|\bpx\b", "price", 0.8),
-    (r"quantity|^qty$|\bsize\b|volume|shares|\bunits\b", "quantity", 0.7),
-    (r"\brate\b|yield|coupon", "rate", 0.7),
-    (r"\bpnl\b|profit[_ ]?and[_ ]?loss|p_and_l|p_n_l", "pnl", 0.75),
-    # option value drivers + risk measures + Greeks
-    (r"volatility|implied[_ ]?vol|\bvol\b|\biv\b", "volatility", 0.8),
-    (r"\bstrike\b|strike[_ ]?price", "strike", 0.85),
-    (r"\bspot\b|spot[_ ]?price", "spot", 0.8),
-    (r"expected[_ ]?shortfall|\bcvar\b|\bes\b", "expected_shortfall", 0.85),
-    (r"\bvar\b|value[_ ]?at[_ ]?risk", "var", 0.8),
-    (r"\bdelta\b", "delta", 0.9),
-    (r"\bgamma\b", "gamma", 0.9),
-    (r"\bvega\b", "vega", 0.9),
-    (r"\btheta\b", "theta", 0.9),
-    (r"\brho\b", "rho", 0.9),
-]
-_NUMERIC_COMPILED = [
-    (re.compile(p, re.IGNORECASE), sem, conf) for p, sem, conf in _NUMERIC_PATTERNS
-]
-
-# Array-quantity name patterns (specific first) -> (semantic, confidence). Gated
-# to array(float) columns. The same name (e.g. "pnl") maps to a *different*
-# semantic here than in the scalar table — the column's type decides which set is
-# consulted, so scalar pnl (signed float) and array pnl_series never collide.
-_ARRAY_NUMERIC_PATTERNS: list[tuple[str, str, float]] = [
-    (r"\bpnl\b|pnl[_ ]?(series|vector|path|ts)|profit[_ ]?and[_ ]?loss", "pnl_series", 0.8),
-    # Mark-to-Future (or an array-typed Mark-to-Market) is a valuation path — the array
-    # twin of scalar pv.
-    (r"\bmtf\b|\bmtm\b|mark[_ ]?to[_ ]?(future|market)", "mtf", 0.8),
-    (r"return|\brtns?\b", "returns", 0.7),
-    (r"curve|term[_ ]?structure|yield[_ ]?curve", "curve", 0.75),
-    (r"\bsensis?\b|tenor[_ ]?sensi|sensi[_ ]?ladder|delta[_ ]?ladder", "tenor_sensitivities", 0.85),
-    (r"sensitivit|\bdeltas\b|bucket|risk[_ ]?weights?|\bladder\b", "sensitivities", 0.8),
-]
-_ARRAY_NUMERIC_COMPILED = [
-    (re.compile(p, re.IGNORECASE), sem, conf) for p, sem, conf in _ARRAY_NUMERIC_PATTERNS
-]
-
-# Date name patterns (specific first) -> (semantic, confidence). Gated to date/datetime
-# columns. maturity/settlement derive from trade_date (+ tenor / + lag).
-_DATE_PATTERNS: list[tuple[str, str, float]] = [
-    (r"trade[_ ]?date|booking[_ ]?date|execution[_ ]?date|deal[_ ]?date", "trade_date", 0.85),
-    (
-        r"maturity[_ ]?date|expiry[_ ]?date|expiration[_ ]?date|^maturity$|^expiry$|end[_ ]?date",
-        "maturity_date",
-        0.85,
-    ),
-    (r"settlement[_ ]?date|value[_ ]?date|settle[_ ]?date|^settlement$", "settlement_date", 0.85),
-]
-_DATE_COMPILED = [(re.compile(p, re.IGNORECASE), sem, conf) for p, sem, conf in _DATE_PATTERNS]
-
-# Integer name patterns (specific first) -> (semantic, confidence). Gated to *scalar*
-# int columns. Deliberately narrow — a plain int is usually a key/count best left to the
-# scaffolder, so only a product identifier is claimed here (its string twin lives in the
-# categorical set as `identifier`).
-_INT_PATTERNS: list[tuple[str, str, float]] = [
-    (r"product[_ ]?id|prod[_ ]?id", "identifier_int", 0.8),
-]
-_INT_COMPILED = [(re.compile(p, re.IGNORECASE), sem, conf) for p, sem, conf in _INT_PATTERNS]
+# Public alias: semantic -> (udf_module, udf_class, base_args, parent_arg | None). Same
+# dict object the registry owns, kept for the historical import path used by scaffolding.
+SEMANTIC_GENERATORS = REGISTRY.generators
 
 
 def _is_string_type(col_type: str | None) -> bool:
-    """Finance categorical/identifier semantics apply to string-typed columns only."""
+    """Categorical/identifier semantics apply to string-typed columns only."""
     return bool(col_type) and "string" in col_type.lower()
 
 
@@ -411,49 +83,38 @@ def _match_from(compiled, name: str) -> tuple[str | None, float]:
     return None, 0.0
 
 
-def _match_name(name: str) -> tuple[str | None, float]:
-    return _match_from(_COMPILED, name)
-
-
-def _match_numeric_name(name: str) -> tuple[str | None, float]:
-    return _match_from(_NUMERIC_COMPILED, name)
-
-
-def _match_array_numeric_name(name: str) -> tuple[str | None, float]:
-    return _match_from(_ARRAY_NUMERIC_COMPILED, name)
-
-
-def _match_by_type(name: str, col_type: str | None) -> tuple[str | None, float]:
+def _match_by_type(name: str, col_type: str | None, active=None) -> tuple[str | None, float]:
     """Name-based match dispatched on column type: string -> categorical/id,
     array(float) -> array quantity, scalar float -> scalar quantity, date/datetime ->
     date semantics, scalar int -> integer identifier. The type (never the name) decides
     which pattern set is consulted, so a name like "pnl" resolves to the scalar or the
     array semantic by whether the column is a float or an array(float), and "productId"
-    resolves to `identifier` (string) or `identifier_int` (int). Other types are never
-    matched."""
+    resolves to `identifier` (string) or `identifier_int` (int). Patterns come from the
+    domain registry, scoped to the ``active`` modules. Other types are never matched."""
     if _is_string_type(col_type):
-        return _match_from(_COMPILED, name)
+        return _match_from(REGISTRY.compiled("string", active), name)
     if _is_float_array_type(col_type):
-        return _match_from(_ARRAY_NUMERIC_COMPILED, name)
+        return _match_from(REGISTRY.compiled("array_float", active), name)
     if _is_float_type(col_type):
-        return _match_from(_NUMERIC_COMPILED, name)
+        return _match_from(REGISTRY.compiled("float", active), name)
     if _is_date_type(col_type):
-        return _match_from(_DATE_COMPILED, name)
+        return _match_from(REGISTRY.compiled("date", active), name)
     if _is_int_type(col_type):
-        return _match_from(_INT_COMPILED, name)
+        return _match_from(REGISTRY.compiled("int", active), name)
     return None, 0.0
 
 
-def heuristic_inferrer(table_name, columns, samples=None):
+def heuristic_inferrer(table_name, columns, samples=None, active=None):
     """Infer column semantics from column names (and types) alone.
 
     Dependency-free and deterministic. ``samples`` is accepted for interface
-    parity with richer inferrers but unused here.
+    parity with richer inferrers but unused here. ``active`` scopes which domain
+    modules' patterns/links participate (``None`` = all discovered).
     """
     result: dict[str, dict] = {}
     for col in columns:
         name = col.get("name", "")
-        semantic, confidence = _match_by_type(str(name), col.get("type"))
+        semantic, confidence = _match_by_type(str(name), col.get("type"), active)
         if semantic is None:
             continue
         result[name] = {
@@ -464,24 +125,17 @@ def heuristic_inferrer(table_name, columns, samples=None):
             "by": "heuristic",
         }
 
-    return _link_hierarchy_parents(result)
+    return _link_hierarchy_parents(result, active)
 
 
-def _link_hierarchy_parents(result: dict) -> dict:
+def _link_hierarchy_parents(result: dict, active=None) -> dict:
     """Point each coherent child record at the column it must read (in place), so the
-    generator stays consistent with that parent. Covers the asset_class hierarchy
-    (categorical children instrument_type / risk_factor_group + conditional numeric
-    children like notional) and counterparty attributes (sector / country). A parent the
-    inferrer already chose (e.g. the agent conditioning notional on instrument_type) is
-    kept."""
-    links = {
-        "asset_class": _HIERARCHY_CHILDREN + _ASSET_CLASS_CONDITIONAL,
-        "counterparty": _COUNTERPARTY_CHILDREN,
-        "tenor": _TENOR_CHILDREN,
-        "trade_date": _TRADE_DATE_CHILDREN,
-        "maturity_date": _MATURITY_CHILDREN,
-    }
-    for parent_semantic, children in links.items():
+    generator stays consistent with that parent — using the parent→children links the
+    domain packs registered (e.g. the asset_class hierarchy + conditional numerics,
+    counterparty attributes, trade-date-derived dates), scoped to the ``active`` modules.
+    A parent the inferrer already chose (e.g. the agent conditioning a value on a
+    different column) is kept."""
+    for parent_semantic, children in REGISTRY.links_for(active).items():
         parent_col = next(
             (n for n, rec in result.items() if rec["semantic"] == parent_semantic), None
         )
@@ -498,63 +152,25 @@ def _link_hierarchy_parents(result: dict) -> dict:
 # Minimum fraction of sample values that must match for a semantic to be assigned.
 _VALUE_THRESHOLD = 0.9
 
-# Lazily built so importing this module stays dependency-free (the vocab lives in
-# market_finance._data, the checksum validators in market_finance.generators which import numpy).
-_VALUE_CLASSIFIERS = None
+# Built lazily from the registry's classifier factories on first use, so importing this
+# module (and value-free inference) pulls in no numpy-backed validators. Cached per
+# scope (the active-module set) so a scoped run only classifies with its modules.
+_VALUE_CLASSIFIERS: dict = {}
 
 
-def _build_value_classifiers():
-    """Ordered (semantic, predicate) pairs, most specific first. Each predicate
-    takes a single string value and returns True if it looks like that semantic."""
-    import re as _re
-
-    from datagenic.domains.market_finance import _data as fd
-    from datagenic.domains.market_finance import generators as gf
-
-    isin_re = _re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
-    cusip_re = _re.compile(r"^[A-Z0-9]{8}[0-9]$")
-    sedol_re = _re.compile(r"^[A-Z0-9]{6}[0-9]$")
-    pair_re = _re.compile(r"^([A-Z]{3})/([A-Z]{3})$")
-    currencies = set(fd.CURRENCIES)
-
-    def _valid(value, regex, check_fn):
-        return bool(regex.match(value)) and check_fn(value[:-1]) == value[-1]
-
-    def _is_pair(value):
-        m = pair_re.match(value)
-        return bool(m) and m.group(1) in currencies and m.group(2) in currencies
-
-    ratings = set(fd.SP_RATINGS) | set(fd.MOODYS_RATINGS)
-
-    return [
-        ("isin", lambda v: _valid(v, isin_re, gf._isin_check_digit)),
-        ("cusip", lambda v: _valid(v, cusip_re, gf._cusip_check_digit)),
-        ("sedol", lambda v: _valid(v, sedol_re, gf._sedol_check_digit)),
-        ("currency_pair", _is_pair),
-        ("currency", lambda v: v in currencies),
-        ("tenor", lambda v: v in set(fd.TENORS)),
-        ("asset_class", lambda v: v in set(fd.ASSET_CLASSES)),
-        ("credit_rating", lambda v: v in ratings),
-        ("gics_sector", lambda v: v in set(fd.GICS_SECTORS)),
-        ("instrument_type", lambda v: v in set(fd.ALL_INSTRUMENT_TYPES)),
-        ("risk_factor_group", lambda v: v in set(fd.ALL_RISK_FACTOR_GROUPS)),
-        ("counterparty", lambda v: v in set(fd.COUNTERPARTIES)),
-    ]
-
-
-def _classify_values(values) -> tuple[str | None, float]:
+def _classify_values(values, active=None) -> tuple[str | None, float]:
     """Classify a column from its sample values. Returns the most specific
     semantic whose match fraction clears the threshold, with that fraction as the
     confidence; ``(None, 0.0)`` if nothing matches."""
-    global _VALUE_CLASSIFIERS
     vals = [str(v) for v in values if v is not None and str(v) != ""]
     if not vals:
         return None, 0.0
-    if _VALUE_CLASSIFIERS is None:
-        _VALUE_CLASSIFIERS = _build_value_classifiers()
+    key = None if active is None else frozenset(active)
+    if key not in _VALUE_CLASSIFIERS:
+        _VALUE_CLASSIFIERS[key] = REGISTRY.value_classifiers(active)
 
     best_semantic, best_fraction = None, 0.0
-    for semantic, predicate in _VALUE_CLASSIFIERS:  # specific first; strict > keeps it on ties
+    for semantic, predicate in _VALUE_CLASSIFIERS[key]:  # specific first; strict > keeps it on ties
         fraction = sum(predicate(v) for v in vals) / len(vals)
         if fraction >= _VALUE_THRESHOLD and fraction > best_fraction:
             best_semantic, best_fraction = semantic, fraction
@@ -683,15 +299,16 @@ def _fit_conditional_array(child_arrays, parent_values) -> dict | None:
 
 
 def _fit_numeric(result: dict, samples: dict) -> dict:
-    """Attach fitted distribution args (in place) to numeric-semantic records
-    using the sample values — conditional (per parent category) for conditional
-    semantics, flat otherwise. Overrides the curated priors at ``build_generator``."""
+    """Attach fitted distribution args (in place) to numeric-semantic records using the
+    sample values, dispatching on the semantic's registered numeric fit-kind — conditional
+    (per parent category) for conditional semantics, flat otherwise. Overrides the curated
+    priors at ``build_generator``."""
     for col, rec in result.items():
-        semantic = rec["semantic"]
         values = samples.get(col)
         if not values:
             continue
-        if semantic in CONDITIONAL_QUANTITY_PRIORS:
+        kind = REGISTRY.numeric_kinds.get(rec["semantic"])
+        if kind == "scalar_conditional":
             parent_values = samples.get(rec.get("parent"))
             fitted = _fit_conditional(values, parent_values) if parent_values else None
             if fitted is None:  # no usable parent -> still fit a data-driven default
@@ -699,7 +316,7 @@ def _fit_numeric(result: dict, samples: dict) -> dict:
                 fitted = {"default": spec} if spec else None
             if fitted:
                 rec["args"] = fitted
-        elif semantic in CONDITIONAL_ARRAY_QUANTITY_PRIORS:
+        elif kind == "array_conditional":
             parent_values = samples.get(rec.get("parent"))
             fitted = _fit_conditional_array(values, parent_values) if parent_values else None
             if fitted is None:  # no usable parent -> pooled element fit as default
@@ -707,24 +324,25 @@ def _fit_numeric(result: dict, samples: dict) -> dict:
                 fitted = {"default": spec} if spec else None
             if fitted:
                 rec["args"] = fitted
-        elif semantic in QUANTITY_PRIORS:
+        elif kind == "scalar":
             spec = fit_distribution(values)
             if spec:
                 rec["args"] = spec
-        elif semantic in ARRAY_QUANTITY_PRIORS:
+        elif kind == "array":
             fitted = fit_array_distribution(values)
             if fitted:
                 rec["args"] = fitted
     return result
 
 
-def values_inferrer(table_name, columns, samples=None):
+def values_inferrer(table_name, columns, samples=None, active=None):
     """Infer semantics from real sample values, falling back to the name
     heuristic for columns with no sample evidence (so one pass covers everything).
     Numeric quantities additionally have their distribution **fitted** from the
     samples (family + params, per parent category when conditional).
 
-    ``samples`` is ``{col_name: [values]}`` (as normalised by ``Configs``).
+    ``samples`` is ``{col_name: [values]}`` (as normalised by ``Configs``); ``active``
+    scopes which domain modules participate (``None`` = all discovered).
     """
     samples = samples or {}
     result: dict[str, dict] = {}
@@ -733,9 +351,9 @@ def values_inferrer(table_name, columns, samples=None):
         semantic, confidence, by = None, 0.0, "values"
 
         if name in samples:
-            semantic, confidence = _classify_values(samples[name])
+            semantic, confidence = _classify_values(samples[name], active)
         if semantic is None:
-            semantic, confidence = _match_by_type(str(name), col.get("type"))
+            semantic, confidence = _match_by_type(str(name), col.get("type"), active)
             by = "heuristic"
         if semantic is None:
             continue
@@ -748,13 +366,15 @@ def values_inferrer(table_name, columns, samples=None):
             "by": by,
         }
 
-    _link_hierarchy_parents(result)  # sets parents so conditional fits can group
+    _link_hierarchy_parents(result, active)  # sets parents so conditional fits can group
     return _fit_numeric(result, samples)
 
 
-def _agent_inferrer(table_name, columns, samples=None):
+def _agent_inferrer(table_name, columns, samples=None, active=None):
     """Lazy delegator to the LLM-backed inferrer. Imported on first call only, so
-    neither this module nor ``scaffolding`` pulls in the anthropic SDK at import."""
+    neither this module nor ``scaffolding`` pulls in the anthropic SDK at import.
+    ``active`` is accepted for interface parity; the agent proposes semantics directly
+    rather than matching registered patterns, so module scoping does not constrain it."""
     from datagenic.semantics_agent import agent_inferrer
 
     return agent_inferrer(table_name, columns, samples=samples)
@@ -767,17 +387,22 @@ _BUILTINS = {
 }
 
 
-def resolve_inferrer(spec):
+def resolve_inferrer(spec, active=None):
     """Resolve an inferrer spec to a callable.
 
     ``spec`` may be a callable (returned as-is), ``None`` (returns ``None`` = no
     inference), a built-in name (``heuristic`` / ``values`` / ``agent``), or a
     ``module:function`` path (resolved like the scaffolder's ``--adaptor``).
+
+    ``active`` (the selected-module scope, ``None`` = all) is bound into the built-in
+    inferrers so inference only consults those modules' patterns/links/classifiers.
+    User-supplied inferrers (a callable or ``module:function``) propose semantics
+    directly, so scoping is not applied to them.
     """
     if spec is None or callable(spec):
         return spec
     if spec in _BUILTINS:
-        return _BUILTINS[spec]
+        return functools.partial(_BUILTINS[spec], active=active)
     if ":" in spec:
         module_name, _, func_name = spec.partition(":")
         return getattr(importlib.import_module(module_name), func_name)
@@ -788,17 +413,21 @@ def resolve_inferrer(spec):
 
 
 def build_generator(
-    semantic: str, parent: str | None = None, overrides: dict | None = None
+    semantic: str, parent: str | None = None, overrides: dict | None = None, active=None
 ) -> dict:
     """Build the ``column_generator`` dict for a recognised semantic.
 
     Introspects the target generator's ``call`` defaults (same as ``Columns``
     does for the built-in generators) and wires the parent column into the
     coherence arg when applicable. ``overrides`` (e.g. distribution params fitted
-    from a sample) take precedence over the curated priors. Raises ``KeyError``
-    for an unknown semantic.
+    from a sample) take precedence over the curated priors. ``active`` scopes the
+    lookup to the selected modules (``None`` = all). Raises ``KeyError`` for a
+    semantic unknown to (or out of scope for) the active modules.
     """
-    module_name, class_name, base_args, parent_arg = SEMANTIC_GENERATORS[semantic]
+    spec = REGISTRY.generator_for(semantic, active)
+    if spec is None:
+        raise KeyError(semantic)
+    module_name, class_name, base_args, parent_arg = spec
     from datagenic.iokit import func
 
     gen_cls = getattr(importlib.import_module(module_name), class_name)
