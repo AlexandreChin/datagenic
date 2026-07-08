@@ -32,22 +32,29 @@ market_finance/
 ## Identifiable fields (~50)
 
 Detected by column **name** (`heuristic`), **sample values** (`values`), or an **LLM**
-(`agent`), and **type-gated** (string / scalar float / `array(float)` / date).
+(`agent`), and **type-gated** (string / scalar float / `array(float)` / date / scalar int).
 
 **Categorical & identifier** (string): `asset_class`, `instrument_type`\*, `risk_factor_group`\*,
 `currency`, `currency_pair`, `tenor`, `credit_rating`, `gics_sector`, `isin`/`cusip`/`sedol`
-(valid check digits), `instrument_name`, `risk_factor_name`, `counterparty`,
-`counterparty_sector`\*, `counterparty_country`\*, `counterparty_ticker`\*, `counterparty_lei`\*
-(valid ISO 7064 check), `trading_book`, `desk`, `side`, `option_type`, `exercise_style`,
-`payment_frequency`, `day_count_convention`, `trade_status`, `exchange`, `clearing_house`\*,
-`underlying`\*.
+(valid check digits), `eligible_collateral` (CSA collateral type), `instrument_name`,
+`risk_factor_name`, `counterparty`, `counterparty_sector`\*, `counterparty_country`\*,
+`counterparty_ticker`\*, `counterparty_lei`\* (valid ISO 7064 check), `trading_book`, `desk`,
+`side`, `option_type`, `exercise_style`, `payment_frequency`, `day_count_convention`,
+`trade_status`, `exchange`, `clearing_house`\*, `underlying`\*, and `identifier` — a unique id for
+a `product_id`-style column (`UniqueIncrementalStrings`).
 
-**Scalar numeric** (float): `notional`\* (scaled by asset class), `price`, `pv`, `fx_rate`,
-`quantity`, `rate`, `spread`, `pnl` (signed), `volatility`, `strike`, `spot`, `var`,
-`expected_shortfall`, and the Greeks `delta`/`gamma`/`vega`/`theta`/`rho`.
+**Scalar numeric** (float): `notional`\* (scaled by asset class), `pv`\* (also `mtm`; a valuation
+**per unit of instrument** — price-scale, not notional-scale — conditioned on asset class),
+`price`, `fx_rate`, `quantity`, `rate`, `spread`, `pnl` (signed), `volatility`, `strike`, `spot`,
+`var`, `expected_shortfall`, and the Greeks `delta`/`gamma`/`vega`/`theta`/`rho`.
 
-**Array numeric** (`array(float)`): `pnl_series`\* (scaled by asset class), `returns`, `curve`,
-`sensitivities`, and `sensis`\* — a **tenor-bucketed sensitivity ladder** (see below).
+**Array numeric** (`array(float)`, width-agnostic — `array(float32)`/`array(float64)` too):
+`pnl_series`\* (scaled by asset class), `returns`, `curve`, `sensitivities`, `mtf`\* (a
+Mark-to-Future per-unit valuation vector — the array twin of scalar `pv`, conditioned on asset
+class), and `sensis`\* — a **tenor-bucketed sensitivity ladder** (see below).
+
+**Scalar int**: `identifier_int` — a unique id for a `product_id`-style int column
+(`UniqueIncrementalIntegers`).
 
 **Dates**: `trade_date`, `maturity_date`\* (`= trade_date + tenor`), `settlement_date`\*
 (`= trade_date + lag`).

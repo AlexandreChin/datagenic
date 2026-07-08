@@ -125,6 +125,27 @@ def test_scaffold_orders_asset_class_before_pnl():
     assert pnl["_inferred"]["parent"] == "asset_class"
 
 
+def test_mtf_is_asset_class_conditional_per_unit():
+    # mtf (Mark-to-Future) is a per-unit-of-instrument valuation vector, conditioned on
+    # asset_class — the array twin of the conditional scalar pv.
+    inferred = heuristic_inferrer(
+        "trades",
+        [{"name": "asset_class", "type": "string"}, {"name": "mtf", "type": "array(float32)"}],
+    )
+    assert inferred["mtf"]["semantic"] == "mtf"
+    assert inferred["mtf"]["parent"] == "asset_class"
+
+    spec = build_generator("mtf", parent="asset_class")
+    assert spec["udf_name"] == "ConditionalArrayFloats"
+    assert spec["args"]["by_column"] == "asset_class"
+    # a geometric zero-drift Brownian valuation path (level-anchored, no ramp)
+    assert spec["args"]["path"] == "gbm"
+    cases = spec["args"]["cases"]
+    assert {"Equity", "Rates", "FX"} <= set(cases)
+    # per unit of instrument: price-like magnitudes, not notional-scale
+    assert all(c["mu"] < 1.0e4 for c in cases.values())
+
+
 # ── end-to-end ────────────────────────────────────────────────────────────────
 
 

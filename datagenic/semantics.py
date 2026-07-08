@@ -55,6 +55,15 @@ SEMANTIC_GENERATORS: dict[str, tuple[str, str, dict, str | None]] = {
     "isin": ("datagenic.market_finance.generators", "ISIN", {}, None),
     "cusip": ("datagenic.market_finance.generators", "CUSIP", {}, None),
     "sedol": ("datagenic.market_finance.generators", "SEDOL", {}, None),
+    "eligible_collateral": (
+        "datagenic.market_finance.generators",
+        "EligibleCollateral",
+        {},
+        None,
+    ),
+    # generic unique identifiers — the type decides which one is chosen (string vs int).
+    "identifier": ("datagenic.generators", "UniqueIncrementalStrings", {"prefix": "ID_"}, None),
+    "identifier_int": ("datagenic.generators", "UniqueIncrementalIntegers", {}, None),
     "instrument_name": ("datagenic.market_finance.generators", "InstrumentName", {}, None),
     "risk_factor_name": ("datagenic.market_finance.generators", "RiskFactorName", {}, None),
     # tenor-bucketed sensitivities: a ladder array scaled by asset_class, shaped by
@@ -225,6 +234,12 @@ _PATTERNS: list[tuple[str, str, float]] = [
     (r"isin", "isin", 0.97),
     (r"cusip", "cusip", 0.97),
     (r"sedol", "sedol", 0.97),
+    # eligible collateral (CSA field); matches the correct spelling and the common
+    # "elligible" typo — `l+` covers one or two l's, prefix optional so bare
+    # "collateral" also matches. String-gated, so a numeric collateral value is skipped.
+    (r"(el+igible[_ ]?)?collateral", "eligible_collateral", 0.85),
+    # a product identifier (string here; the int case is handled by the int pattern set).
+    (r"product[_ ]?id|prod[_ ]?id", "identifier", 0.8),
     (r"(currency|ccy|fx)[_ ]?pair", "currency_pair", 0.9),
     (r"risk[_ ]?factor[_ ]?(group|class)|rf[_ ]?group|riskfactorgroup", "risk_factor_group", 0.9),
     (r"risk[_ ]?factor[_ ]?name|rf[_ ]?name", "risk_factor_name", 0.85),
@@ -266,7 +281,8 @@ _NUMERIC_PATTERNS: list[tuple[str, str, float]] = [
     (r"fx[_ ]?rate|spot[_ ]?rate|exchange[_ ]?rate", "fx_rate", 0.85),
     (r"spread", "spread", 0.8),
     (
-        r"\bpv\b|\bnpv\b|\bmtm\b|present[_ ]?value|mark[_ ]?to[_ ]?market|market[_ ]?value",
+        r"\bpv\b|\bnpv\b|\bmtm\b|\bmtf\b|present[_ ]?value|"
+        r"mark[_ ]?to[_ ]?(market|future)|market[_ ]?value",
         "pv",
         0.75,
     ),
@@ -296,6 +312,9 @@ _NUMERIC_COMPILED = [
 # consulted, so scalar pnl (signed float) and array pnl_series never collide.
 _ARRAY_NUMERIC_PATTERNS: list[tuple[str, str, float]] = [
     (r"\bpnl\b|pnl[_ ]?(series|vector|path|ts)|profit[_ ]?and[_ ]?loss", "pnl_series", 0.8),
+    # Mark-to-Future (or an array-typed Mark-to-Market) is a valuation path — the array
+    # twin of scalar pv.
+    (r"\bmtf\b|\bmtm\b|mark[_ ]?to[_ ]?(future|market)", "mtf", 0.8),
     (r"return|\brtns?\b", "returns", 0.7),
     (r"curve|term[_ ]?structure|yield[_ ]?curve", "curve", 0.75),
     (r"\bsensis?\b|tenor[_ ]?sensi|sensi[_ ]?ladder|delta[_ ]?ladder", "tenor_sensitivities", 0.85),
@@ -318,6 +337,15 @@ _DATE_PATTERNS: list[tuple[str, str, float]] = [
 ]
 _DATE_COMPILED = [(re.compile(p, re.IGNORECASE), sem, conf) for p, sem, conf in _DATE_PATTERNS]
 
+# Integer name patterns (specific first) -> (semantic, confidence). Gated to *scalar*
+# int columns. Deliberately narrow — a plain int is usually a key/count best left to the
+# scaffolder, so only a product identifier is claimed here (its string twin lives in the
+# categorical set as `identifier`).
+_INT_PATTERNS: list[tuple[str, str, float]] = [
+    (r"product[_ ]?id|prod[_ ]?id", "identifier_int", 0.8),
+]
+_INT_COMPILED = [(re.compile(p, re.IGNORECASE), sem, conf) for p, sem, conf in _INT_PATTERNS]
+
 
 def _is_string_type(col_type: str | None) -> bool:
     """Finance categorical/identifier semantics apply to string-typed columns only."""
@@ -325,8 +353,11 @@ def _is_string_type(col_type: str | None) -> bool:
 
 
 def _is_float_array_type(col_type: str | None) -> bool:
-    """Array-quantity semantics apply to array(float) columns."""
-    return bool(col_type) and "array(float)" in col_type.lower()
+    """Array-quantity semantics apply to array(float) columns — width-agnostic, so
+    array(float32) / array(float64) count too (the hand-authored IR uses the sized
+    variants)."""
+    t = col_type.lower() if col_type else ""
+    return "array" in t and "float" in t
 
 
 def _is_float_type(col_type: str | None) -> bool:
@@ -339,6 +370,13 @@ def _is_float_type(col_type: str | None) -> bool:
 def _is_date_type(col_type: str | None) -> bool:
     """Date semantics apply to date / datetime columns."""
     return bool(col_type) and "date" in col_type.lower()
+
+
+def _is_int_type(col_type: str | None) -> bool:
+    """Integer identifier semantics apply to *scalar* int columns only — not floats
+    and not array(int)."""
+    t = col_type.lower() if col_type else ""
+    return "int" in t and "float" not in t and "array" not in t
 
 
 def _match_from(compiled, name: str) -> tuple[str | None, float]:
@@ -363,9 +401,11 @@ def _match_array_numeric_name(name: str) -> tuple[str | None, float]:
 def _match_by_type(name: str, col_type: str | None) -> tuple[str | None, float]:
     """Name-based match dispatched on column type: string -> categorical/id,
     array(float) -> array quantity, scalar float -> scalar quantity, date/datetime ->
-    date semantics. The type (never the name) decides which pattern set is consulted,
-    so a name like "pnl" resolves to the scalar or the array semantic by whether the
-    column is a float or an array(float). Other types are never matched."""
+    date semantics, scalar int -> integer identifier. The type (never the name) decides
+    which pattern set is consulted, so a name like "pnl" resolves to the scalar or the
+    array semantic by whether the column is a float or an array(float), and "productId"
+    resolves to `identifier` (string) or `identifier_int` (int). Other types are never
+    matched."""
     if _is_string_type(col_type):
         return _match_from(_COMPILED, name)
     if _is_float_array_type(col_type):
@@ -374,6 +414,8 @@ def _match_by_type(name: str, col_type: str | None) -> tuple[str | None, float]:
         return _match_from(_NUMERIC_COMPILED, name)
     if _is_date_type(col_type):
         return _match_from(_DATE_COMPILED, name)
+    if _is_int_type(col_type):
+        return _match_from(_INT_COMPILED, name)
     return None, 0.0
 
 

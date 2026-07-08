@@ -54,13 +54,27 @@ def _draw_float_array(rng, rows, size, mu, sigma, distribution, path):
       axis): the elements form a time path of per-step increments, suited to a
       PnL/returns series. (For a signed/``normal`` family this is a random walk;
       for ``lognormal`` the positive increments make a monotone series.)
+    - ``path="gbm"`` → a geometric **zero-drift** Brownian path (a martingale),
+      anchored at the level ``mu`` with per-step log-volatility ``sigma``:
+      ``mu·exp(Σ (σ·Z − ½σ²))``, ``Z ~ N(0,1)``. Positive, level-anchored (every
+      column's mean stays ~``mu`` — no ramp, no decay), and autocorrelated — the
+      right shape for a valuation path (e.g. Mark-to-Future). ``distribution`` is
+      ignored (the path is intrinsically geometric); ``mu`` must be > 0.
     """
+    if path == "gbm":
+        if mu <= 0:
+            raise ValueError(f"path='gbm' needs mu (starting level) > 0, got {mu}")
+        z = np.asarray(_draw_floats(rng, rows * size, 0.0, 1.0, "normal"), dtype=float).reshape(
+            rows, size
+        )
+        log_steps = sigma * z - 0.5 * sigma**2  # zero-drift (martingale) log increments
+        return mu * np.exp(np.cumsum(log_steps, axis=1))
     flat = _draw_floats(rng, rows * size, mu, sigma, distribution)
     arr = np.asarray(flat, dtype=float).reshape(rows, size)
     if path == "walk":
         return np.cumsum(arr, axis=1)
     if path != "iid":
-        raise ValueError(f"unknown path {path!r}; expected 'iid' or 'walk'")
+        raise ValueError(f"unknown path {path!r}; expected 'iid', 'walk', or 'gbm'")
     return arr
 
 

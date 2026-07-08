@@ -136,6 +136,53 @@ def test_heuristic_inferrer_maps_and_links_parent():
     assert inferred["risk_factor_group"]["parent"] == "asset_class"
 
 
+def test_product_id_maps_to_identifier_for_string_and_int():
+    # productId is recognised as a unique identifier whether it is declared string or
+    # int; the type selects the matching unique-incremental generator.
+    inferred = heuristic_inferrer(
+        "products",
+        [
+            {"name": "productId", "type": "string"},
+            {"name": "product_id", "type": "int"},
+            {"name": "prodId", "type": "int"},
+        ],
+    )
+    assert inferred["productId"]["semantic"] == "identifier"
+    assert inferred["product_id"]["semantic"] == "identifier_int"
+    assert inferred["prodId"]["semantic"] == "identifier_int"
+
+    from datagenic.semantics import SEMANTIC_GENERATORS
+
+    assert SEMANTIC_GENERATORS["identifier"][1] == "UniqueIncrementalStrings"
+    assert SEMANTIC_GENERATORS["identifier_int"][1] == "UniqueIncrementalIntegers"
+
+
+def test_product_id_pattern_does_not_grab_other_ids():
+    # Narrow, product-specific: a plain trade/csa key must not be swept up.
+    inferred = heuristic_inferrer(
+        "trades", [{"name": "tradeId", "type": "int"}, {"name": "csaId", "type": "string"}]
+    )
+    assert "tradeId" not in inferred  # ints only match product ids
+    assert inferred.get("csaId", {}).get("semantic") != "identifier"
+
+
+def test_eligible_collateral_maps_to_categorical():
+    # Matches both the correct spelling and the IR's `elligibleCollateral` typo.
+    inferred = heuristic_inferrer(
+        "csa",
+        [
+            {"name": "eligibleCollateral", "type": "string"},
+            {"name": "elligibleCollateral", "type": "string"},
+        ],
+    )
+    assert inferred["eligibleCollateral"]["semantic"] == "eligible_collateral"
+    assert inferred["elligibleCollateral"]["semantic"] == "eligible_collateral"
+    # a fixed-vocabulary categorical generator is wired, drawing from the collateral vocab
+    out = gf.EligibleCollateral().call(_number_of_rows_per_batch=5, _rng=np.random.default_rng(0))
+    assert len(out) == 5
+    assert set(out) <= set(fd.COLLATERAL_TYPES)
+
+
 # ── Scaffolding integration ───────────────────────────────────────────────────
 
 

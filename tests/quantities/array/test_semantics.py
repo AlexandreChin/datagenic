@@ -38,6 +38,19 @@ def test_type_decides_scalar_vs_array_for_same_name():
     assert _infer("pnl", "array(float)") == "pnl_series"
 
 
+def test_mtf_array_maps_to_mtf_valuation_series():
+    # Mark-to-Future is a per-unit-of-instrument valuation path: an array(float32) mtf
+    # is the array analogue of the (conditional) scalar pv — a geometric zero-drift
+    # Brownian conditioned on asset_class. An array-typed mtm maps here too.
+    assert _infer("mtf", "array(float32)") == "mtf"
+    assert _infer("mark_to_future", "array(float)") == "mtf"
+    assert _infer("mtm", "array(float32)") == "mtf"  # array mark-to-market is a valuation path too
+    module, cls, args, parent_arg = SEMANTIC_GENERATORS["mtf"]
+    assert cls == "ConditionalArrayFloats"
+    assert args["path"] == "gbm"
+    assert parent_arg == "by_column"  # conditioned on the asset_class column
+
+
 def test_scalar_semantic_does_not_grab_array_column():
     # 'notional' is a scalar-only semantic; on an array(float) column it must NOT
     # be wired to the scalar ConditionalFloats (no array pattern matches it either)

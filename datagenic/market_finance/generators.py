@@ -210,6 +210,25 @@ class Currency:
         return _declared_cardinality(fd.CURRENCIES, list_of_values, kwargs)
 
 
+class EligibleCollateral:
+    def __init__(self) -> None:
+        self._generator_description = "generates a CSA eligible-collateral type (e.g. Cash)"
+
+    def call(
+        self,
+        _number_of_rows_per_batch: int,
+        list_of_values: list | None = None,
+        probabilities: list | None = None,
+        **kwargs,
+    ):
+        return _sample(
+            fd.COLLATERAL_TYPES, _number_of_rows_per_batch, kwargs, list_of_values, probabilities
+        )
+
+    def cardinality(self, list_of_values=None, **kwargs):
+        return _declared_cardinality(fd.COLLATERAL_TYPES, list_of_values, kwargs)
+
+
 class CurrencyPair:
     def __init__(self) -> None:
         self._generator_description = "generates an FX currency pair (e.g. EUR/USD)"
