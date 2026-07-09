@@ -899,17 +899,33 @@ class RollingTradeDate:
         return self._compute(kwargs, tenors, probabilities, repeat)
 
 
+def _bucket_residual(residual_days, tenors=None):
+    """Snap remaining-maturity day counts to the nearest standard tenor bucket label
+    (ON, 1M, 3M, 1Y, 5Y, …) — the residual maturity reported as a risk-style bucket."""
+    labels = list(tenors) if tenors else list(fd.TENORS)
+    choices = np.array([_tenor_to_days(t) for t in labels], dtype="int64")
+    resid = np.asarray(residual_days, dtype="int64")
+    idx = np.abs(resid[:, None] - choices[None, :]).argmin(axis=1)
+    return np.asarray(labels, dtype=object)[idx]
+
+
 class RollingTenor:
     def __init__(self) -> None:
         self._generator_description = (
-            "rolling-book tenor: the tenor of the trade live at the as-of date in each slot's "
-            "renewal process (a fresh tenor is drawn on every roll). Coherent with "
-            "RollingTradeDate / RollingMaturityDate via the shared per-slot schedule."
+            "rolling-book tenor: the trade's *remaining* maturity at the as-of date "
+            "(maturity_date - as-of), snapped to the nearest standard tenor bucket. trade_date "
+            "and maturity_date are fixed while the trade is live, so this bucket shrinks as the "
+            "as-of advances and resets on each roll. Coherent with RollingTradeDate / "
+            "RollingMaturityDate via the shared per-slot schedule."
         )
 
     def _compute(self, kwargs, tenors, probabilities, repeat):
-        _, _, labels = _rolling_active(kwargs, tenors, probabilities, repeat)
-        return labels
+        start, book, labels = _rolling_active(kwargs, tenors, probabilities, repeat)
+        asof = np.datetime64(kwargs["_date"], "D")
+        elapsed = int((asof - start).astype("timedelta64[D]").astype("int64"))
+        term_days = np.array([_tenor_to_days(t) for t in labels], dtype="int64")
+        residual = (book + term_days) - elapsed  # maturity offset − as-of offset (days left)
+        return _bucket_residual(residual, tenors)
 
     def call(
         self, _number_of_rows_per_batch: int, tenors=None, probabilities=None, repeat=1, **kwargs
@@ -924,41 +940,24 @@ class RollingTenor:
 class RollingMaturityDate:
     def __init__(self) -> None:
         self._generator_description = (
-            "rolling-book maturity date = trade_date + tenor, read from the (rolling) "
-            "trade_date and tenor columns of the partial table — so maturity is always exactly "
-            "consistent with the active trade and strictly after the as-of date."
+            "rolling-book maturity date = trade_date + original term, computed from the slot's "
+            "renewal schedule (not the residual tenor column) so it stays fixed while the trade "
+            "is live and strictly after the as-of date; a fresh maturity is set on each roll."
         )
 
-    def _compute(self, kwargs, trade_date_column, tenor_column):
-        table = kwargs.get("_table")
-        n = int(kwargs["_number_of_rows_per_batch"])
-        base = _base_dates(table, trade_date_column, n, kwargs["_date"])
-        tenor = _column_values(table, tenor_column)
-        days = (
-            np.array([_tenor_to_days(t) for t in tenor], dtype="int64")
-            if tenor is not None
-            else np.full(n, 365, dtype="int64")
-        )
-        return base + days.astype("timedelta64[D]")
+    def _compute(self, kwargs, tenors, probabilities, repeat):
+        start, book, labels = _rolling_active(kwargs, tenors, probabilities, repeat)
+        term_days = np.array([_tenor_to_days(t) for t in labels], dtype="int64")
+        return start + (book + term_days).astype("timedelta64[D]")
 
     def call(
-        self,
-        _number_of_rows_per_batch: int,
-        trade_date_column: str = "trade_date",
-        tenor_column: str = "tenor",
-        **kwargs,
+        self, _number_of_rows_per_batch: int, tenors=None, probabilities=None, repeat=1, **kwargs
     ):
         kwargs["_number_of_rows_per_batch"] = _number_of_rows_per_batch
-        return self._compute(kwargs, trade_date_column, tenor_column)
+        return self._compute(kwargs, tenors, probabilities, repeat)
 
-    def recall(
-        self,
-        input_array=None,
-        trade_date_column: str = "trade_date",
-        tenor_column: str = "tenor",
-        **kwargs,
-    ):
-        return self._compute(kwargs, trade_date_column, tenor_column)
+    def recall(self, input_array=None, tenors=None, probabilities=None, repeat=1, **kwargs):
+        return self._compute(kwargs, tenors, probabilities, repeat)
 
 
 class RollingTradeId:

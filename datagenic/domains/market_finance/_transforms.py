@@ -46,10 +46,10 @@ def apply_rolling_book(ctx, scenarios: int = 1) -> None:
             if rec and rec["semantic"] in remap:
                 rec["semantic"] = remap[rec["semantic"]]
                 rec["by"] = "rolling_book"
-                # trade_date & tenor are schedule roots; maturity reads trade_date
-                rec["parent"] = (
-                    trade_date_col if rec["semantic"] == "rolling_maturity_date" else None
-                )
+                # all three derive from the shared per-slot schedule (seed-based), so none
+                # reads another column: trade_date & maturity are fixed roots, tenor is the
+                # residual maturity (maturity − as-of).
+                rec["parent"] = None
         # The book's identity is a per-slot trade id that rolls (new id on each
         # roll). Support composite keys, not just a single key: map an id-like key
         # column (or the first key that isn't a rolling-schedule column) to
@@ -78,11 +78,15 @@ def apply_rolling_book(ctx, scenarios: int = 1) -> None:
         if m > 1 and len(scenario_keys) != 1:
             m = 1
         if m > 1:
-            # tile the schedule roots across the scenario rows (maturity reads the
-            # tiled trade_date/tenor from the frame, so it needs no repeat itself)
+            # tile the schedule across the scenario rows: trade_date, tenor and maturity
+            # all derive from the per-slot schedule, so each needs the same repeat.
             for col in table["columns"]:
                 rec = semantics.get((tname, col["name"]))
-                if rec and rec.get("semantic") in ("rolling_trade_date", "rolling_tenor"):
+                if rec and rec.get("semantic") in (
+                    "rolling_trade_date",
+                    "rolling_tenor",
+                    "rolling_maturity_date",
+                ):
                     rec["args"] = {**rec.get("args", {}), "repeat": m}
             semantics[(tname, scenario_keys[0])] = {
                 "semantic": "rolling_scenario",

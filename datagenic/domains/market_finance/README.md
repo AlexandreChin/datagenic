@@ -128,12 +128,15 @@ transforms; omit it to keep all discovered modules active. Pass `{"scenarios": m
 transform's options to repeat each position across `m` scenario rows.)
 
 Each row is a **slot** running a deterministic renewal process: a trade is booked, matures,
-and the slot immediately re-books a new trade (new tenor, new `trade_id`). At any as-of date
+and the slot immediately re-books a new trade (new term, new `trade_id`). At any as-of date
 the slot emits the trade whose `[trade_date, maturity)` interval contains it, so:
 
 - **every emitted trade is live** — `trade_date ≤ as-of < maturity_date`, at *every* date;
-- **`maturity_date = trade_date + tenor`** stays exact (same active trade);
-- the book is **constant size** — short-tenor slots turn over (new id each roll), long-tenor
+- **`trade_date` and `maturity_date` are fixed** while the trade is live (set at inception
+  from the slot's schedule);
+- **`tenor` is the *remaining* maturity** — `maturity_date − as-of`, snapped to the nearest
+  standard bucket — so it **shrinks as the as-of advances** and resets on each roll;
+- the book is **constant size** — short-dated slots turn over (new id each roll), long-dated
   trades persist; the pool never shrinks;
 - it is **byte-reproducible** across dates, shards and workers — the schedule is a pure
   function of `(global_seed, batch, slot)`, never the as-of date.

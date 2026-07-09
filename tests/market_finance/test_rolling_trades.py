@@ -24,8 +24,9 @@ _TENORS = ["ON", "1W", "1M", "3M", "1Y", "5Y", "10Y"]
 
 
 def _unit(asof, n=2000, start="2024-01-01", seed=42, batch=1, tenors=None, probabilities=None):
-    """Run the four rolling generators for one (date, batch) unit, as the engine would:
-    tenor + trade_date first, then maturity (reads both) and trade_id (reads trade_date)."""
+    """Run the rolling generators for one (date, batch) unit. trade_date and maturity_date
+    are fixed per live trade (from the slot schedule); tenor is the *remaining* maturity at
+    the as-of, bucketed. trade_id reads the (rolling) trade_date column."""
     tenors = tenors or _TENORS
     fw = dict(
         _number_of_rows_per_batch=n,
@@ -34,11 +35,10 @@ def _unit(asof, n=2000, start="2024-01-01", seed=42, batch=1, tenors=None, proba
         _global_seed=seed,
         _batch_number=batch,
     )
-    tenor = gf.RollingTenor().call(tenors=tenors, probabilities=probabilities, **fw)
     trade_date = gf.RollingTradeDate().call(tenors=tenors, probabilities=probabilities, **fw)
-    partial = pl.DataFrame({"tenor": tenor, "trade_date": trade_date})
-    maturity = gf.RollingMaturityDate().call(_table=partial, **fw)
-    trade_id = gf.RollingTradeId().call(_table=partial, **fw)
+    maturity = gf.RollingMaturityDate().call(tenors=tenors, probabilities=probabilities, **fw)
+    tenor = gf.RollingTenor().call(tenors=tenors, probabilities=probabilities, **fw)
+    trade_id = gf.RollingTradeId().call(_table=pl.DataFrame({"trade_date": trade_date}), **fw)
     return {
         "tenor": np.asarray(tenor, dtype=object),
         "trade_date": np.asarray(trade_date, dtype="datetime64[D]"),
@@ -57,11 +57,10 @@ def test_every_trade_is_live_and_coherent_at_every_date():
         # trade_date <= as-of < maturity  (live, with the strict maturity-day boundary)
         assert (u["trade_date"] <= asof).all()
         assert (u["maturity_date"] > asof).all()
-        # maturity == trade_date + tenor, exactly (derived from the same active trade)
-        expected = u["trade_date"] + np.array(
-            [gf._tenor_to_days(t) for t in u["tenor"]], dtype="timedelta64[D]"
-        )
-        assert np.array_equal(u["maturity_date"], expected)
+        # tenor == remaining maturity (maturity - as-of) snapped to the nearest bucket
+        # (same ladder _unit generates with)
+        residual = (u["maturity_date"] - asof).astype("int64")
+        assert np.array_equal(u["tenor"], gf._bucket_residual(residual, _TENORS))
 
 
 def test_book_is_constant_size_with_turnover_and_new_ids():
@@ -81,10 +80,14 @@ def test_long_tenor_trades_persist_short_ones_roll():
     first = _unit("2024-01-01")
     later = _unit("2024-02-15")
     same_id = first["trade_id"] == later["trade_id"]  # a slot that did NOT roll
-    # a persisting slot keeps its id, tenor, trade_date and maturity unchanged
     assert same_id.any() and (~same_id).any()
+    # a persisting slot keeps its id, trade_date and maturity_date; only the (residual)
+    # tenor moves — and it can only shrink as the as-of advances
     assert np.array_equal(first["trade_date"][same_id], later["trade_date"][same_id])
-    assert np.array_equal(first["tenor"][same_id], later["tenor"][same_id])
+    assert np.array_equal(first["maturity_date"][same_id], later["maturity_date"][same_id])
+    da = np.array([gf._tenor_to_days(t) for t in first["tenor"][same_id]])
+    db = np.array([gf._tenor_to_days(t) for t in later["tenor"][same_id]])
+    assert (db <= da).all()
     # slots that rolled tend to be the short-dated ones: their first-date maturity
     # fell on/before the later as-of
     rolled = ~same_id

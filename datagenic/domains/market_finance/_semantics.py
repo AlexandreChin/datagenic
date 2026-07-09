@@ -58,7 +58,7 @@ _CATEGORICAL_GENERATORS: dict[str, tuple[str, str | None]] = {
     # Configs(rolling_book=True), which remaps trade_date/tenor/maturity_date/the key).
     "rolling_trade_date": ("RollingTradeDate", None),
     "rolling_tenor": ("RollingTenor", None),
-    "rolling_maturity_date": ("RollingMaturityDate", "trade_date_column"),
+    "rolling_maturity_date": ("RollingMaturityDate", None),
     "rolling_trade_id": ("RollingTradeId", "trade_date_column"),
     "rolling_scenario": ("RollingScenario", None),
 }
