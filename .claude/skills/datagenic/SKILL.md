@@ -41,7 +41,7 @@ Read the relevant reference(s) before responding. For broad tasks, read all of t
 
 ```bash
 datagenic generate-data-config samples/ir/solutions_ir.json -o config.json --output-folder ./out
-datagenic generate-data-config ir.json -o config.json --infer-semantics heuristic  # auto-detect domain columns (heuristic|values|agent|module:function)
+datagenic generate-data-config ir.json -o config.json --infer-semantics heuristic  # auto-detect domain columns (heuristic|empirical|agent|module:function)
 datagenic profile ./samples -o config.json           # scaffold a config from sample files (no IR): infers keys/FKs, fits generator args
 datagenic review-config config.json                  # list inferred columns (lowest confidence first)
 datagenic generate-data config.json                  # sequential

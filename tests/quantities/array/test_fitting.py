@@ -11,7 +11,7 @@ import polars as pl
 
 from datagenic import Generator
 from datagenic.profiling import _ir_type, build_config
-from datagenic.semantics import fit_array_distribution, values_inferrer
+from datagenic.semantics import empirical_inferrer, fit_array_distribution
 
 
 def _series(rng, sigma, n_rows, length):
@@ -68,10 +68,10 @@ def _conditional_pnl(rng, n=3000, length=120):
     return {"asset_class": ac.tolist(), "pnl": pnl}
 
 
-def test_values_inferrer_fits_conditional_array_cases():
+def test_empirical_inferrer_fits_conditional_array_cases():
     samples = _conditional_pnl(np.random.default_rng(0))
     columns = [{"name": "asset_class", "type": "string"}, {"name": "pnl", "type": "array(float)"}]
-    result = values_inferrer("positions", columns, samples=samples)
+    result = empirical_inferrer("positions", columns, samples=samples)
     args = result["pnl"]["args"]
     assert result["pnl"]["semantic"] == "pnl_series"
     assert result["pnl"]["parent"] == "asset_class"
@@ -93,7 +93,7 @@ def test_end_to_end_profile_from_sample_conditional_pnl(tmp_path):
     )
     config, _ir = build_config(
         {"positions": frame},
-        semantic_inferrer="values",
+        semantic_inferrer="empirical",
         output_format="parquet",
         output_folder_path=str(tmp_path / "out"),
         number_of_batches=1,

@@ -1,7 +1,7 @@
 """Fitting numeric distributions from real sample data (Phase 4).
 
 The authoritative accuracy path: instead of curated book-agnostic priors, the
-``values`` inferrer and ``profile``-from-sample fit each numeric column's
+``empirical`` inferrer and ``profile``-from-sample fit each numeric column's
 distribution from the sample — family (lognormal vs normal) + params, and, for a
 conditional quantity, a per-parent-category ``cases`` map. Parameterised to match
 ``generators._draw_floats`` (mu = median in real units, sigma = log-space spread),
@@ -13,7 +13,7 @@ import polars as pl
 
 from datagenic import Generator
 from datagenic.profiling import build_config
-from datagenic.semantics import build_generator, fit_distribution, values_inferrer
+from datagenic.semantics import build_generator, empirical_inferrer, fit_distribution
 
 
 def _lognormal(rng, median, sigma, n):
@@ -63,7 +63,7 @@ def test_lognormal_fit_round_trips_through_draw_floats():
     assert 0.85 < float(np.median(regen)) / float(np.median(sample)) < 1.15
 
 
-# ── conditional per-group fit via the values inferrer ─────────────────────────
+# ── conditional per-group fit via the empirical inferrer ─────────────────────────
 
 
 def _conditional_samples(rng, n=8000):
@@ -77,10 +77,10 @@ def _conditional_samples(rng, n=8000):
     return {"asset_class": ac.tolist(), "notional": notional.tolist()}
 
 
-def test_values_inferrer_fits_conditional_cases_from_sample():
+def test_empirical_inferrer_fits_conditional_cases_from_sample():
     samples = _conditional_samples(np.random.default_rng(0))
     columns = [{"name": "asset_class", "type": "string"}, {"name": "notional", "type": "float"}]
-    result = values_inferrer("trades", columns, samples=samples)
+    result = empirical_inferrer("trades", columns, samples=samples)
 
     args = result["notional"]["args"]
     assert result["notional"]["parent"] == "asset_class"
@@ -99,7 +99,7 @@ def test_thin_group_falls_back_to_default():
     order = rng.permutation(len(ac))
     samples = {"asset_class": ac[order].tolist(), "notional": notional[order].tolist()}
     columns = [{"name": "asset_class", "type": "string"}, {"name": "notional", "type": "float"}]
-    args = values_inferrer("trades", columns, samples=samples)["notional"]["args"]
+    args = empirical_inferrer("trades", columns, samples=samples)["notional"]["args"]
     assert "Equity" in args["cases"]
     assert "Rates" not in args["cases"]  # below the min-sample threshold
 
@@ -142,7 +142,7 @@ def test_end_to_end_profile_from_sample_fits_conditional(tmp_path):
     )
     config, _ir = build_config(
         {"trades": frame},
-        semantic_inferrer="values",
+        semantic_inferrer="empirical",
         output_format="parquet",
         output_folder_path=str(tmp_path / "out"),
         number_of_batches=1,

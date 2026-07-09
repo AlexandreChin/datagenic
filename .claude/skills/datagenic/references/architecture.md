@@ -92,8 +92,8 @@ too: the storage layer validates via the parquet footer without downloading the 
   Vocabularies + numeric priors (`QUANTITY_PRIORS`, `CONDITIONAL_QUANTITY_PRIORS`) in `domains/market_finance/_data.py`.
 - `semantics.py` / `semantics_agent.py` — scaffold-time semantic inference that maps columns to
   domain generators, categorical **and** numeric (scalar + array; no IR hand-tagging):
-  `heuristic` / `values` inferrers (dependency-free; type-gated string/float/array(float);
-  `values` fits distributions — element params + array length — via `fit_distribution` /
+  `heuristic` / `empirical` inferrers (dependency-free; type-gated string/float/array(float);
+  `empirical` fits distributions — element params + array length — via `fit_distribution` /
   `fit_array_distribution`) and the opt-in LLM `agent` (`[agent]` extra, lazy `anthropic`).
   See `config.md`.
 - `profiling.py` — profile-from-sample scaffolding (`build_config`, CLI `profile`): reads sample

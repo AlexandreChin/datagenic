@@ -105,7 +105,7 @@ def main():
     gen_config_parser.add_argument(
         "--infer-semantics",
         dest="infer_semantics",
-        metavar="heuristic|values|agent|module:function",
+        metavar="heuristic|empirical|agent|module:function",
         default=None,
         help="Auto-detect each column's domain meaning during scaffolding and wire "
         "a realistic generator (e.g. financial-markets asset class / instrument / "
@@ -116,7 +116,7 @@ def main():
     gen_config_parser.add_argument(
         "--samples",
         metavar="DIR | {table:path}",
-        help="Sample data for value-based inference ('--infer-semantics values'): a "
+        help="Sample data for value-based inference ('--infer-semantics empirical'): a "
         "directory holding <table>.parquet/<table>.csv per table, or an inline/"
         "file JSON map of table->path. Lets the inferrer read real values.",
     )
@@ -164,7 +164,7 @@ def main():
         "--infer-semantics",
         dest="infer_semantics",
         default=None,
-        help="Also run semantic inference (heuristic|values|agent|module:function)",
+        help="Also run semantic inference (heuristic|empirical|agent|module:function)",
     )
     profile_parser.add_argument(
         "--batches", type=int, default=2, help="Number of batches (default: 2)"

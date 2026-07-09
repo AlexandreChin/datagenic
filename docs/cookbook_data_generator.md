@@ -186,7 +186,7 @@ value frequencies, null rate) from the data.
 ```bash
 datagenic profile ./samples -o config.json                 # ./samples/<table>.parquet|.csv per table
 datagenic profile ./samples -o config.json --emit-ir ir.json   # also dump the synthesised IR for review
-datagenic profile ./samples -o config.json --infer-semantics values  # + finance generators from values
+datagenic profile ./samples -o config.json --infer-semantics empirical  # + finance generators from values
 datagenic generate-data config.json
 ```
 
@@ -280,7 +280,7 @@ per-row series, e.g. a PnL path). A `pnl` array column maps to `ConditionalArray
 whose per-row array volatility depends on `asset_class` (a Rates book's PnL path swings
 wider than an Equity book's); `returns`/`curve` map to flat array generators. The column's
 **type decides scalar vs array** — `pnl` as `float` is a signed scalar, `pnl` as
-`array(float)` is a `pnl_series` — so the same name never cross-wires. `profile`/`values`
+`array(float)` is a `pnl_series` — so the same name never cross-wires. `profile`/`empirical`
 fit the element family/params *and* the array length from a sample; `agent` proposes them
 (plus `size_of_arrays`).
 
@@ -292,11 +292,11 @@ strategies:
 | Strategy | Basis | Needs |
 |---|---|---|
 | `heuristic` | column-name patterns (`ccy`→currency, `isin`→isin, `asset_class`→asset_class, `notional`→notional, …); numeric quantities use the curated prior | nothing |
-| `values` | real sample values (ISO-4217 membership, ISIN/CUSIP/SEDOL checksum, taxonomy vocab); **fits** numeric distributions (family + params, per-category `cases`) from the sample; falls back to names when no sample | `samples=` |
+| `empirical` | real sample values (ISO-4217 membership, ISIN/CUSIP/SEDOL checksum, taxonomy vocab); **fits** numeric distributions (family + params, per-category `cases`) from the sample; falls back to names when no sample | `samples=` |
 | `agent` | an LLM (Claude) for ambiguous columns; also proposes a numeric family + scale (and conditioning column) | `pip install 'datagenic[agent]'` + `ANTHROPIC_API_KEY` |
 
 The numeric strategies form an accuracy ladder: `heuristic` = a plausible curated guess,
-`values`/`profile` = **fitted from your data** (the authoritative path), `agent` = the long
+`empirical`/`profile` = **fitted from your data** (the authoritative path), `agent` = the long
 tail with no curated prior.
 
 ```python
@@ -324,7 +324,7 @@ Configs(input=ir, semantic_inferrer="heuristic").dump(file_path="config.json")
 datagenic generate-data-config ir.json -o config.json --infer-semantics heuristic
 
 # value-based — point at a directory of <table>.parquet / <table>.csv samples
-datagenic generate-data-config ir.json -o config.json --infer-semantics values --samples ./samples
+datagenic generate-data-config ir.json -o config.json --infer-semantics empirical --samples ./samples
 
 # LLM — opt-in
 datagenic generate-data-config ir.json -o config.json --infer-semantics agent

@@ -174,7 +174,7 @@ inference is golden-neutral and opt-in like the categorical side.
 `"walk"`, a cumulative per-row series). Flat `returns`/`curve` map to those; `pnl` maps to
 `ConditionalArrayFloats` (per-row array vol by `asset_class`). The column's **type** decides
 scalar vs array (`_is_float_array_type` vs the tightened `_is_float_type`): `pnl`/`float` →
-scalar signed `pnl`, `pnl`/`array(float)` → `pnl_series` — never crossing. `values`/`profile`
+scalar signed `pnl`, `pnl`/`array(float)` → `pnl_series` — never crossing. `empirical`/`profile`
 fit the element family/params **and** `size_of_arrays` (`fit_array_distribution`), per-group
 when conditional; `agent` proposes them.
 
@@ -184,7 +184,7 @@ when conditional; `agent` proposes them.
 | Strategy | Basis | Needs |
 |---|---|---|
 | `heuristic` | column-name patterns | nothing (dependency-free) |
-| `values` | sample values (vocab membership, ISIN/CUSIP/SEDOL checksum); name fallback | `samples=` (dict of frames/paths, or a directory of `<table>.parquet`/`.csv`) |
+| `empirical` | sample values (vocab membership, ISIN/CUSIP/SEDOL checksum); name fallback | `samples=` (dict of frames/paths, or a directory of `<table>.parquet`/`.csv`) |
 | `agent` | LLM (Claude) for ambiguous columns | `pip install 'datagenic[agent]'` + `ANTHROPIC_API_KEY` |
 | `module:function` | your own `fn(table, columns, samples=None) -> {col: {semantic, confidence, parent, ...}}` | — |
 
@@ -195,7 +195,7 @@ fine-tune. The inferrer never hand-edits the config beyond the generator choice;
 stays editable.
 
 **Fitting numeric distributions (accuracy ladder).** For numeric quantities the strategies form
-a ladder: `heuristic` uses the curated prior (a plausible guess); `values`/`profile` **fit** the
+a ladder: `heuristic` uses the curated prior (a plausible guess); `empirical`/`profile` **fit** the
 distribution from the sample — `semantics.fit_distribution` picks the family and recovers params
 in the generator's units (so it round-trips), and for a conditional quantity fits a per-category
 `cases` map (`group_by` the parent, min ~30 rows/group else pooled `default`); `agent` proposes a

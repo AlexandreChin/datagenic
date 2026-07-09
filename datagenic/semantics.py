@@ -24,7 +24,7 @@ where ``columns`` is a list of ``{"name", "type"}`` and each record is::
      "alternatives": list[str], "by": str}
 
 ``resolve_inferrer`` maps a CLI/string spec to a callable. Built-ins: ``heuristic``
-(name-based, dependency-free), ``values`` (sample-value based, with a name-heuristic
+(name-based, dependency-free), ``empirical`` (sample-value based, with a name-heuristic
 fallback) and ``agent`` (opt-in LLM via ``datagenic.semantics_agent``; needs the
 anthropic SDK, lazy-imported only when invoked).
 """
@@ -335,8 +335,8 @@ def _fit_numeric(result: dict, samples: dict) -> dict:
     return result
 
 
-def values_inferrer(table_name, columns, samples=None, active=None):
-    """Infer semantics from real sample values, falling back to the name
+def empirical_inferrer(table_name, columns, samples=None, active=None):
+    """Infer semantics empirically from real sample values, falling back to the name
     heuristic for columns with no sample evidence (so one pass covers everything).
     Numeric quantities additionally have their distribution **fitted** from the
     samples (family + params, per parent category when conditional).
@@ -348,7 +348,7 @@ def values_inferrer(table_name, columns, samples=None, active=None):
     result: dict[str, dict] = {}
     for col in columns:
         name = col.get("name", "")
-        semantic, confidence, by = None, 0.0, "values"
+        semantic, confidence, by = None, 0.0, "empirical"
 
         if name in samples:
             semantic, confidence = _classify_values(samples[name], active)
@@ -382,7 +382,7 @@ def _agent_inferrer(table_name, columns, samples=None, active=None):
 
 _BUILTINS = {
     "heuristic": heuristic_inferrer,
-    "values": values_inferrer,
+    "empirical": empirical_inferrer,
     "agent": _agent_inferrer,
 }
 

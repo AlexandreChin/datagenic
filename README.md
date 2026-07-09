@@ -27,7 +27,7 @@ column or plug in your own logic — the scaffold gets you most of the way, you 
   value mixes, distributions and null rates. You never hand-author a schema.
 - **A domain pack, not a special case.** The engine stays domain-neutral; `market_finance`
   is a pluggable pack that teaches it capital-markets knowledge, **auto-detected by name,
-  sample values, or an LLM** (`--infer-semantics heuristic|values|agent`) — no tagging.
+  sample values, or an LLM** (`--infer-semantics heuristic|empirical|agent`) — no tagging.
   Optional and extensible (bring your own domain):
   - **coherent taxonomy** — `asset class → instrument → risk factor` always line up (Rates → IR Swap → IR Curve, never a mismatch)
   - **valid identifiers** — ISIN / CUSIP / SEDOL with real check digits (they pass validators, unique per run)
@@ -36,7 +36,7 @@ column or plug in your own logic — the scaffold gets you most of the way, you 
   - **tenor-bucketed sensitivities** — a risk ladder (`array(float)`) scaled by asset class, shaped by instrument (bullet vs ladder), and **zeroed beyond maturity** (a trade maturing in 1M has no sensitivity past the 1M bucket)
   - **rolling positions** — an optional **live book** (the `rolling_book` scaffold transform, opted into via `domains={"market_finance": {"transforms": {"rolling_book": {}}}}`): matured trades roll to freshly-booked ones, so every as-of date is a constant-size set of live trades (`trade_date ≤ as-of < maturity`)
   - **market dimensions** — currencies, tenors, ratings, GICS sectors, ~1,000 real counterparties, books & desks
-- **Accuracy ladder.** `heuristic` gives a plausible guess, `values`/`profile` **fit the
+- **Accuracy ladder.** `heuristic` gives a plausible guess, `empirical`/`profile` **fit the
   distributions from your real sample**, `agent` covers the long tail — every pick annotated
   for review (`datagenic review-config`) and fully hand-editable.
 - **Right-sized reference tables.** With `Configs(reference_rows="auto")` a dimension is

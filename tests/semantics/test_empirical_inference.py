@@ -1,6 +1,6 @@
-"""Phase 2 — value-based semantic inference (``--infer-semantics values``).
+"""Phase 2 — value-based semantic inference (``--infer-semantics empirical``).
 
-The ``values`` inferrer classifies a column from its actual sample values
+The ``empirical`` inferrer classifies a column from its actual sample values
 (currency/tenor/taxonomy-vocabulary membership; ISIN/CUSIP/SEDOL regex +
 checksum), and falls back to the name heuristic for columns with no sample
 evidence. ``Configs`` accepts ``samples`` (a dict of frames/paths or a directory)
@@ -17,7 +17,7 @@ import polars as pl
 
 import datagenic.domains.market_finance.generators as gf
 from datagenic import Configs
-from datagenic.semantics import values_inferrer
+from datagenic.semantics import empirical_inferrer
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -33,10 +33,10 @@ def _valid_isins(n, seed=0):
     )
 
 
-# ── values_inferrer directly ──────────────────────────────────────────────────
+# ── empirical_inferrer directly ──────────────────────────────────────────────────
 
 
-def test_values_classify_by_content_not_name():
+def test_empirical_classify_by_content_not_name():
     """A column whose NAME gives no hint is still classified from its values."""
     columns = [
         {"name": "field_a", "type": "string"},
@@ -48,9 +48,9 @@ def test_values_classify_by_content_not_name():
         "field_b": _valid_isins(10),
         "field_c": ["1Y", "5Y", "10Y", "3M"],
     }
-    inferred = values_inferrer("t", columns, samples=samples)
+    inferred = empirical_inferrer("t", columns, samples=samples)
     assert inferred["field_a"]["semantic"] == "currency"
-    assert inferred["field_a"]["by"] == "values"
+    assert inferred["field_a"]["by"] == "empirical"
     assert inferred["field_b"]["semantic"] == "isin"
     assert inferred["field_c"]["semantic"] == "tenor"
     # value evidence is high-confidence
@@ -62,13 +62,13 @@ def test_isin_classification_requires_valid_checksum():
     # corrupt the check digit so the regex still matches but the checksum fails
     corrupt = [s[:-1] + str((int(s[-1]) + 1) % 10) for s in valid]
 
-    good = values_inferrer("t", [{"name": "x", "type": "string"}], samples={"x": valid})
-    bad = values_inferrer("t", [{"name": "x", "type": "string"}], samples={"x": corrupt})
+    good = empirical_inferrer("t", [{"name": "x", "type": "string"}], samples={"x": valid})
+    bad = empirical_inferrer("t", [{"name": "x", "type": "string"}], samples={"x": corrupt})
     assert good["x"]["semantic"] == "isin"
     assert "x" not in bad  # bad checksums -> not recognised as ISIN (no name hint either)
 
 
-def test_values_links_hierarchy_parent_and_is_coherent_target():
+def test_empirical_links_hierarchy_parent_and_is_coherent_target():
     columns = [
         {"name": "ac", "type": "string"},
         {"name": "it", "type": "string"},
@@ -77,18 +77,18 @@ def test_values_links_hierarchy_parent_and_is_coherent_target():
         "ac": ["Rates", "Credit", "Equity", "FX"],
         "it": ["IR Swap", "CDS", "Equity Option", "FX Forward"],
     }
-    inferred = values_inferrer("t", columns, samples=samples)
+    inferred = empirical_inferrer("t", columns, samples=samples)
     assert inferred["ac"]["semantic"] == "asset_class"
     assert inferred["it"]["semantic"] == "instrument_type"
     assert inferred["it"]["parent"] == "ac"  # linked to the asset_class column
 
 
-def test_values_falls_back_to_name_heuristic_without_samples():
+def test_empirical_falls_back_to_name_heuristic_without_samples():
     columns = [
         {"name": "ccy", "type": "string"},  # name hint, no sample
         {"name": "isin", "type": "string"},
     ]
-    inferred = values_inferrer("t", columns, samples={})
+    inferred = empirical_inferrer("t", columns, samples={})
     assert inferred["ccy"]["semantic"] == "currency"
     assert inferred["ccy"]["by"] == "heuristic"
     assert inferred["isin"]["semantic"] == "isin"
@@ -137,7 +137,7 @@ def test_configs_with_frame_samples_classifies_by_value():
         input=_finance_ir(),
         output_format="parquet",
         number_of_batches=1,
-        semantic_inferrer="values",
+        semantic_inferrer="empirical",
         samples={"trades": _trades_sample()},
     ).config_template
     cols = {c["col_name"]: c for c in cfg["tables"][0]["columns"]}
@@ -145,7 +145,7 @@ def test_configs_with_frame_samples_classifies_by_value():
     assert cols["dim1"]["column_generator"]["udf_name"] == "FinancialAssetClass"
     assert cols["dim2"]["column_generator"]["udf_name"] == "FinancialInstrumentType"
     assert cols["dim3"]["column_generator"]["udf_name"] == "Currency"
-    assert cols["dim1"]["_inferred"]["by"] == "values"
+    assert cols["dim1"]["_inferred"]["by"] == "empirical"
     # hierarchy child wired + ordered after its parent
     assert cols["dim2"]["column_generator"]["args"]["asset_class_column"] == "dim1"
     order = [c["col_name"] for c in cfg["tables"][0]["columns"]]
@@ -158,7 +158,7 @@ def test_configs_with_directory_samples(tmp_path):
         input=_finance_ir(),
         output_format="parquet",
         number_of_batches=1,
-        semantic_inferrer="values",
+        semantic_inferrer="empirical",
         samples=str(tmp_path),
     ).config_template
     cols = {c["col_name"]: c for c in cfg["tables"][0]["columns"]}
@@ -166,7 +166,7 @@ def test_configs_with_directory_samples(tmp_path):
     assert cols["dim3"]["column_generator"]["udf_name"] == "Currency"
 
 
-def test_cli_infer_values_with_samples_dir(tmp_path):
+def test_cli_infer_empirical_with_samples_dir(tmp_path):
     _trades_sample().write_parquet(tmp_path / "trades.parquet")
     out = tmp_path / "config.json"
     result = subprocess.run(
@@ -181,7 +181,7 @@ def test_cli_infer_values_with_samples_dir(tmp_path):
             "--output-folder",
             str(tmp_path / "data"),
             "--infer-semantics",
-            "values",
+            "empirical",
             "--samples",
             str(tmp_path),
         ],
