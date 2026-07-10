@@ -41,6 +41,8 @@ datagenic generate-data config.json --parallel 8     # all local cores (byte-ide
 datagenic generate-data config.json --shard 1 --of 8 # one worker of a distributed run
 datagenic generate-data config.json --tables orders  # a "job": only this table + its upstream closure
 datagenic check-distributable config.json            # verify sharding is byte-safe
+datagenic visualize-ir ir.json                       # render the IR schema as a mermaid ER diagram (stdout)
+datagenic visualize-ir ir.json -o ir.html --html     # ...or a standalone HTML page
 ```
 
 ### Golden baseline
@@ -64,7 +66,7 @@ The **IR** is the native input: a flat `{name, tables:[{type, name, keys, column
 
 ## Module map (`datagenic/`)
 
-- `__init__.py` — lazy (PEP 562) re-exports of the public API: `Configs`, `Columns` (scaffolding), `Generator` (engine), `GraphDependencies` (dependency_graph). A bare `import datagenic` must stay cheap — it pulls in no polars/pandas/cloud SDK. Keep it that way.
+- `__init__.py` — lazy (PEP 562) re-exports of the public API: `Configs`, `Columns` (scaffolding), `Generator` (engine), `GraphDependencies` (dependency_graph), `IRDiagram` (ir_diagram). A bare `import datagenic` must stay cheap — it pulls in no polars/pandas/cloud SDK. Keep it that way.
 - `scaffolding.py` — `Configs` (IR → config; optional `semantic_inferrer=`/`samples=` for domain-aware generator selection) and `Columns` (default-generator selection). Opt-in `Configs(reference_rows="auto")` sizes each **reference/dimension table to its strict minimal grain** instead of a flat count: `number_of_rows = ∏ cardinality(unicity key)` — a bounded key (fixed-vocabulary generator / `list_of_values`) uses its real domain, a free (synthetic-id) key uses the `number_of_rows_in_non_fact_tables` budget, and only when ≥2 keys are free is that budget split geometrically (the sole case cardinalities are equalized). Auto references become broadcast dimensions (`single_batch`/`single_date`), and composite keys enable `scale_unique_by_construction` so the grain is enumerated *exactly*. Default (`reference_rows=None`) keeps the legacy flat sizing, so it's additive/golden-safe. A **sole bounded-vocabulary key** is sampled, not enumerated, so it can undershoot its domain (~0.63× for N-from-N) — this warns; use a composite key or explicit `number_of_rows` for exact coverage. Reference size is independent of the fact tables (or how many) that reference it (`_key_cardinality`/`_resolve_grain`/`_size_reference_table`).
 - `engine.py` — the heart. `Generator` (config resolution, validation, the generation loop, checkpointing) and `_Journal` (append-only JSONL run log + derived `generation_summary.json`).
 - `generators.py` — the library of column generators (`RandomFloats`, `BrownianFloats`, `UniqueIncrementalStrings`, array/timestamp/multivariate generators, etc.). Each is a class with `call()` and optionally `recall()` / `cardinality()`. The float generators (scalar **and** array: `RandomArrayFloats`/`BrownianArrayFloats`) take a `distribution` arg (`"normal"` default — byte-identical — or `"lognormal"`, median + log-σ via `_draw_floats`); the array ones also take `path` (`"iid"` default / `"walk"`, a cumulative per-row series). `ConditionalFloats` / `ConditionalArrayFloats` draw each row from a per-category distribution read off a parent column (`by_column`) in the partial `_table` — the numeric analogue of the coherent hierarchy — falling back to a `default` when the parent is absent.
@@ -77,6 +79,7 @@ The **IR** is the native input: a flat `{name, tables:[{type, name, keys, column
 - `protocols.py` — runtime-checkable `Protocol` contracts for column generators and postprocessors, enforced in `Generator.validate()`. **Read this to understand the UDF contract**, including the `INPUT_SCOPE` shardability declaration.
 - `dtypes.py` — frame/dtype helpers and the `_Ungenerated` sentinel (referencing a table before it's produced raises, instead of silently yielding an empty frame).
 - `dependency_graph.py` — `GraphDependencies` builds a mermaid flowchart of table/file dependencies from a config.
+- `ir_diagram.py` — `IRDiagram` renders an **IR** (the input schema) as a mermaid **ER diagram** — the schema counterpart to `GraphDependencies` (config lineage). Takes an IR dict or JSON path; `to_mermaid()` returns the `erDiagram` (tables → entities, columns with types, keys → `PK`, foreign keys → `FK` + a many-to-one relationship edge), `dump_file()` writes fenced-mermaid markdown, `dump_html()` a standalone page (mermaid via CDN). Dependency-free (stdlib only); CLI `visualize-ir`.
 - `orchestration.py` — generation-side distribution: `run_shard`, `run_parallel`, `shard_batch_range`, and `check_distributable`.
 - `iokit/` — the storage layer. `storages.py` (`Storages`, the unified local/cloud interface) and `cloud_providers/` (azure_blob, aws_s3, sftp). Cloud SDKs are imported **lazily per `storage_type`** so local generation needs none of them.
 

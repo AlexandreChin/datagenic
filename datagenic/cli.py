@@ -173,6 +173,28 @@ def main():
     profile_parser.add_argument("--end-date", default="2024-01-02")
     profile_parser.add_argument("--seed", type=int, default=0)
 
+    # ── visualize-ir ───────────────────────────────────────────────────────────
+    viz_parser = sub.add_parser(
+        "visualize-ir",
+        help="Render an IR (the input schema) as a Mermaid ER diagram — tables, columns, "
+        "keys (PK), foreign keys (FK) and their relationships. Prints mermaid to stdout, "
+        "or writes a .md / .html file with -o.",
+    )
+    viz_parser.add_argument("input", help="Path to IR JSON, or an inline JSON object string")
+    viz_parser.add_argument(
+        "-o", "--output", help="Write to this file instead of stdout (.md fenced mermaid, or .html)"
+    )
+    viz_parser.add_argument(
+        "--html",
+        action="store_true",
+        help="With -o, write a standalone HTML page (renders via a mermaid CDN) instead of markdown",
+    )
+    viz_parser.add_argument(
+        "--adaptor",
+        default=None,
+        help="Map a non-IR input JSON to the IR first, e.g. mypkg.adaptors:my_adaptor",
+    )
+
     args = parser.parse_args()
 
     # ── Dispatch ───────────────────────────────────────────────────────────
@@ -313,6 +335,36 @@ def main():
             ir_path.parent.mkdir(parents=True, exist_ok=True)
             ir_path.write_text(json.dumps(ir, indent=4))
             print(f"synthesised IR available here:{args.emit_ir}")
+
+    elif args.command == "visualize-ir":
+        import importlib
+        import json
+
+        from datagenic import IRDiagram
+
+        # accept the IR as a file path or an inline JSON object string
+        source = args.input
+        if source.lstrip().startswith("{"):
+            source = json.loads(source)
+        else:
+            with open(source) as f:
+                source = json.load(f)
+
+        # optional adaptor "module:function" to map a non-IR source to the IR
+        if args.adaptor:
+            module_name, _, func_name = args.adaptor.partition(":")
+            if not func_name:
+                parser.error("--adaptor must be 'module:function'")
+            source = getattr(importlib.import_module(module_name), func_name)(source)
+
+        diagram = IRDiagram(source)
+        if args.output:
+            if args.html:
+                diagram.dump_html(args.output)
+            else:
+                diagram.dump_file(args.output)
+        else:
+            print(diagram.to_mermaid())
 
 
 if __name__ == "__main__":

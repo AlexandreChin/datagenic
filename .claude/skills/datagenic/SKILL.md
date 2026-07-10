@@ -49,8 +49,9 @@ datagenic generate-data config.json --parallel 8     # all local cores (byte-ide
 datagenic generate-data config.json --shard 1 --of 8 # one worker of a distributed run
 datagenic generate-data config.json --tables orders  # a "job": orders + its upstream closure only
 datagenic check-distributable config.json            # prove sharding is byte-safe
+datagenic visualize-ir ir.json                       # render the IR schema as a mermaid ER diagram
 ```
 
-**Public API** (lazily re-exported from `datagenic`): `Configs`, `Columns` (scaffolding), `Generator` (engine), `GraphDependencies` (dependency graph). A bare `import datagenic` stays cheap — it pulls in no polars/pandas/cloud SDK. Domain generators live in `datagenic.domains.market_finance.generators` and the scaffold-time semantic inference in `datagenic.semantics` (+ the opt-in LLM `datagenic.semantics_agent`, `[agent]` extra). Profile-from-sample scaffolding (`build_config`, CLI `profile`) lives in `datagenic.profiling`. See `references/config.md`.
+**Public API** (lazily re-exported from `datagenic`): `Configs`, `Columns` (scaffolding), `Generator` (engine), `GraphDependencies` (config-lineage flowchart), `IRDiagram` (IR-schema ER diagram; CLI `visualize-ir`). A bare `import datagenic` stays cheap — it pulls in no polars/pandas/cloud SDK. Domain generators live in `datagenic.domains.market_finance.generators` and the scaffold-time semantic inference in `datagenic.semantics` (+ the opt-in LLM `datagenic.semantics_agent`, `[agent]` extra). Profile-from-sample scaffolding (`build_config`, CLI `profile`) lives in `datagenic.profiling`. See `references/config.md`.
 
 **Requires Python ≥ 3.12.** Polars is the working frame type in the engine; pandas is accepted at boundaries and normalised.

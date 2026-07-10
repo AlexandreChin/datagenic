@@ -10,7 +10,8 @@ owning module on first access, so a bare ``import datagenic`` stays cheap.
 Their homes:
   - ``Configs`` / ``Columns``  → ``datagenic.scaffolding``
   - ``Generator``             → ``datagenic.engine``
-  - ``GraphDependencies``     → ``datagenic.dependency_graph``
+  - ``GraphDependencies``     → ``datagenic.dependency_graph`` (visualize a config's lineage)
+  - ``IRDiagram``             → ``datagenic.ir_diagram`` (visualize an IR schema as a mermaid ER diagram)
   - ``build_config``          → ``datagenic.profiling`` (scaffold a config from sample files)
 """
 
@@ -19,6 +20,7 @@ _LAZY = {
     "Columns": "datagenic.scaffolding",
     "Generator": "datagenic.engine",
     "GraphDependencies": "datagenic.dependency_graph",
+    "IRDiagram": "datagenic.ir_diagram",
     "build_config": "datagenic.profiling",
 }
 

@@ -105,7 +105,11 @@ too: the storage layer validates via the parquet footer without downloading the 
   in `Generator.validate()`, including the `INPUT_SCOPE` declaration. **Read this for the UDF contract.**
 - `dtypes.py` — frame/dtype helpers and the `_Ungenerated` sentinel.
 - `dependency_graph.py` — `GraphDependencies` builds a mermaid flowchart (`dump_file`) or an
-  interactive HTML viewer (`dump_html`) of table/file/post-processor dependencies.
+  interactive HTML viewer (`dump_html`) of table/file/post-processor dependencies (from a config).
+- `ir_diagram.py` — `IRDiagram` renders an **IR** (the input schema) as a mermaid **ER diagram**:
+  tables → entities, columns with types, keys → `PK`, foreign keys → `FK` + relationship edges.
+  `to_mermaid()` / `dump_file()` (markdown) / `dump_html()` (standalone page). Dependency-free;
+  CLI `visualize-ir`. The schema counterpart to `GraphDependencies` (which shows config lineage).
 - `orchestration.py` — generation-side distribution: `run_shard`, `run_parallel`,
   `shard_batch_range`, `check_distributable`.
 - `iokit/` — the storage layer (`Storages`, `cloud_providers/`); cloud SDKs are imported lazily

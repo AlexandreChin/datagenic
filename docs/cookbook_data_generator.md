@@ -176,6 +176,32 @@ uv run python -m datagenic.cli generate-data-config my_schema.json \
 
 ---
 
+## Visualize an IR (schema diagram)
+
+To see an IR as an entity-relationship diagram — tables, columns + types, keys (`PK`),
+foreign keys (`FK`) and their relationships — render it with `IRDiagram` (or the CLI). It
+emits a Mermaid `erDiagram` you can paste into mermaid.live / GitHub / docs, or dump to a
+standalone HTML page. It's the schema counterpart to `GraphDependencies` (which visualizes a
+generation *config*'s lineage).
+
+```python
+from datagenic import IRDiagram
+
+print(IRDiagram("samples/ir/solutions_ir.json").to_mermaid())  # mermaid erDiagram → stdout
+IRDiagram(ir_dict).dump_file("ir.md")                          # fenced ```mermaid``` markdown
+IRDiagram(ir_dict).dump_html("ir.html")                        # standalone page (mermaid via CDN)
+```
+
+```bash
+datagenic visualize-ir ir.json                    # print mermaid to stdout
+datagenic visualize-ir ir.json -o ir.html --html  # write a standalone HTML page
+datagenic visualize-ir src.json --adaptor mypkg:fn -o ir.md   # map a non-IR schema first
+```
+
+Dependency-free (stdlib only), so it works without polars/pandas installed.
+
+---
+
 ## Profile from a sample (scaffold a config from data files — no IR)
 
 Already have representative data? Point datagenic at a folder of sample files and
