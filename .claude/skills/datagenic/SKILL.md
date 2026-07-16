@@ -23,6 +23,7 @@ You are an expert on **datagenic**, a standalone Python package for deterministi
 | Implementing post-processors: technical args, `call`/`recall`, batch isolation, custom generators (incl. Faker) | `references/postprocessors.md` |
 | Running tests, the golden baseline, lint/type-check | `references/testing.md` |
 | Common errors and behaviour traps | `references/pitfalls.md` |
+| Reusing existing pandas/polars/numpy code (functions or classes) as a generator/post-processor — incl. code returning a dict/list of DataFrames or arbitrary objects | invoke the `reusing-existing-code-in-datagenic` skill |
 
 Read the relevant reference(s) before responding. For broad tasks, read all of them. When something isn't covered, check the source under `datagenic/` and the cookbooks in `docs/`.
 

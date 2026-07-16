@@ -21,6 +21,9 @@ Generating data _right_ is hard in four ways at once. datagenic is built around 
 Point datagenic at a schema (or a folder of sample files) and it scaffolds a complete,
 runnable config with sensible defaults for every column. Where realism matters, refine a
 column or plug in your own logic — the scaffold gets you most of the way, you tune the rest.
+Already have generation code (pandas/polars/numpy)? Reuse it as a column generator or
+post-processor — even a class that returns several related tables at once
+([cookbook](docs/cookbook_data_generator.md) → _Reusing existing pandas/polars code_).
 
 - **No schema? Start from data.** `datagenic profile ./samples -o config.json` reads your
   files and _writes the config for you_ — it infers tables, keys & foreign keys, and fits
@@ -245,7 +248,9 @@ pytest tests/
 **Working in this repo with Claude Code?** It ships a `datagenic` skill
 ([`.claude/skills/datagenic/`](.claude/skills/datagenic/)) that Claude loads for
 guidance on the scaffold→generate pipeline, the IR, config authoring & fine-tuning,
-post-processors (technical args, batch isolation), distribution, and testing.
+post-processors (technical args, batch isolation), distribution, and testing — plus a
+`reusing-existing-code-in-datagenic` skill for porting existing pandas/polars/numpy code
+into datagenic generators & post-processors.
 
 ## License
 

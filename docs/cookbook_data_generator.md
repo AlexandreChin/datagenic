@@ -907,6 +907,82 @@ global RNG — output must be identical), and a sample full-run-vs-2-shards byte
 
 ---
 
+## Reusing existing pandas/polars code
+
+Already have data-generation code — pandas/polars/numpy functions or classes? Reuse it by
+wrapping it in one of the two plug points above. Nothing in datagenic changes; you write a
+thin adapter and reference it from config. **Choose the plug point by the code's _output
+shape_, not by whether it's a function or a class:**
+
+| Your code returns                          | Plug point                              | Adapter returns                                   |
+| ------------------------------------------ | --------------------------------------- | ------------------------------------------------- |
+| one column (numpy array / list / Series)   | **column generator**                    | the array/list/Series (normalized to a Series)    |
+| one table (a `DataFrame`)                  | **post-processor**                      | one `pl.DataFrame` (pandas is coerced)            |
+| **many tables (list/dict of `DataFrame`)** | **fan-out** — one table per output      | each table's post-processor returns its own frame |
+| **an arbitrary object**                    | **reducer** — project to tabular        | a `pl.DataFrame` (datagenic only persists parquet)|
+
+Two mechanics to keep in mind: UDF classes are instantiated **with no constructor args**, so
+every parameter arrives via config `args`/`udf_args` (or a framework kwarg); and the port is
+only reusable once it's **deterministic** — route randomness through the injected `_rng`,
+replace `uuid`/`datetime.now()` with deterministic ids and the injected `_date`, and drop any
+cross-batch/global state (see _Batch isolation & distributability_ above). Verify with
+`datagenic check-distributable`.
+
+### Fan-out: one class that returns several related tables
+
+A post-processor emits exactly one frame per table, so a producer that returns a
+`{"books": df, "positions": df}` dict maps to **one datagenic table per output frame**, all
+driven by the same producer through a single adapter class distinguished by an `output_key`
+config arg. The catch is determinism: every slice must see **byte-identical** producer output
+so their foreign keys line up — and post-processors are handed a _table-dependent_ `_seed`
+(and no `_global_seed`). So seed the producer from a **shared constant** you put in config
+(`producer_seed`) combined with the injected `_date` / `_batch_number`, never from `_rng`/`_seed`:
+
+```python
+# adapters.py  (importable on your PYTHONPATH)
+import functools, hashlib
+import numpy as np, polars as pl
+from legacy_gen import PortfolioProducer          # .build(n, rng) -> {"books": df, "positions": df}
+
+def _producer_rng(producer_seed, date, batch):
+    key = f"{producer_seed}|{date}|{batch}".encode()          # NOT the table name
+    return np.random.default_rng(int.from_bytes(hashlib.sha256(key).digest()[:8], "big"))
+
+@functools.lru_cache(maxsize=16)                              # pure-function cache: keyed on all deterministic inputs
+def _run(producer_seed, date, batch, n):
+    return PortfolioProducer().build(n, _producer_rng(producer_seed, date, batch))
+
+class PortfolioSlice:                                         # same class on every output table
+    INPUT_SCOPE = "batch"
+    def call(self, _date, _batch_number, _number_of_rows_per_batch, producer_seed, output_key, **kwargs):
+        df = _run(producer_seed, str(_date), _batch_number, _number_of_rows_per_batch)[output_key]
+        return df if isinstance(df, pl.DataFrame) else pl.from_pandas(df)
+```
+
+Wire one columns-less table per output, same `udf_name`, differing `output_key`, **shared
+`producer_seed`**:
+
+```json
+{ "table_name": "books", "columns": [], "post_processor": {
+    "udf_module": "adapters", "udf_name": "PortfolioSlice",
+    "udf_args": { "producer_seed": 20240101, "output_key": "books" } } }
+{ "table_name": "positions", "columns": [], "post_processor": {
+    "udf_module": "adapters", "udf_name": "PortfolioSlice",
+    "udf_args": { "producer_seed": 20240101, "output_key": "positions" } } }
+```
+
+The `lru_cache` is a _pure-function_ cache (its key is the full set of deterministic inputs),
+so it never breaks byte-identity — one worker computes the producer once and both slices reuse
+it; other workers/shards recompute identically. Omit it and each slice recomputes (still
+correct, just slower). If the outputs share one schema (mere partitions of the same table),
+prefer a single table over fan-out.
+
+> **Working in this repo with Claude Code?** The `reusing-existing-code-in-datagenic` skill
+> walks through this end to end (routing, the determinism port checklist, fan-out, reducing
+> arbitrary objects, and verification).
+
+---
+
 ## Generating the workflow graph
 
 ```python
