@@ -297,3 +297,34 @@ class NonDeterministicPostProcessor:
 
     def call(self, _number_of_rows_per_batch=3, **kwargs):
         return pl.DataFrame({"r": np.random.random(_number_of_rows_per_batch)})
+
+
+class DateStampingPostProcessor:
+    """A date-varying broadcast (single_batch) table: stamps the current date.
+
+    Paired with ``DateEchoPostProcessor`` to prove such a table is refreshed per
+    date on every batch, not left frozen at the previous batch's last date.
+    """
+
+    def call(self, _date=None, **kwargs):
+        return pl.DataFrame({"id": [1, 2], "d": [str(_date)] * 2})
+
+    def recall(self, _date=None, **kwargs):
+        return self.call(_date=_date, **kwargs)
+
+
+class DateEchoPostProcessor:
+    """Records the date carried by the broadcast table it was fed."""
+
+    def call(self, _input_tables=None, _date=None, _batch_number=None, **kwargs):
+        dim = _as_pl(next(iter((_input_tables or {}).values())))
+        return pl.DataFrame(
+            {
+                "batch": [_batch_number],
+                "date": [str(_date)],
+                "seen": [dim["d"][0]],
+            }
+        )
+
+    def recall(self, **kwargs):
+        return self.call(**kwargs)

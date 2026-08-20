@@ -808,6 +808,25 @@ class Generator:
         return 1 if (table["single_batch"] and first_batch > 1) else batch_number
 
     @staticmethod
+    def _broadcast_consumed(tables):
+        """Names of single_batch (broadcast) tables another table actually reads.
+
+        A broadcast table is worth snapshotting only if something downstream sees
+        it: a postprocessor declaring it in ``_input_tables``, or a dynamic
+        ``number_of_rows`` sized off it. Anything else is regenerated, dumped and
+        never looked at again, so caching it would retain frames for nobody.
+        """
+        broadcast = {t["table_name"] for t in tables if t.get("single_batch")}
+        consumed = set()
+        for table in tables:
+            pp = table.get("post_processor") or {}
+            consumed.update(pp.get("udf_args", {}).get("_input_tables", []))
+            nr = table.get("number_of_rows")
+            if isinstance(nr, dict) and "from_table" in nr:
+                consumed.add(nr["from_table"])
+        return consumed & broadcast
+
+    @staticmethod
     def _resolve_row_count(table, _result, number_of_batches):
         """Set ``table['_number_of_rows_per_batch']`` from its ``number_of_rows``
         spec: a dynamic ``{from_table, multiplier}`` sized off another table's
@@ -1295,6 +1314,45 @@ class Generator:
         for table in self._data_generator_config_file_obj["tables"]:
             _result[table["table_name"]] = _Ungenerated(table["table_name"])
 
+        # Per-date snapshots of single_batch (broadcast) tables. Such a table is
+        # produced on the first batch only, so without a replay the shared _result
+        # would still hold the LAST date's frame when the next batch restarts its
+        # date loop — feeding every consumer (_input_tables / _table) stale data on
+        # batches >= 2. The dumped files are unaffected (dumps stop after the first
+        # batch); this keeps the in-memory view identical to the first batch's.
+        #
+        # Snapshots are references, not copies, and the cache is kept as small as
+        # the run allows: nothing at all when no later batch can ask for a replay,
+        # only the broadcast tables some other table actually reads, and a single
+        # entry for a table whose frame never changes across dates.
+        _broadcast: dict[tuple[str, str], object] = {}
+        _replayed = (
+            self._broadcast_consumed(self._data_generator_config_file_obj["tables"])
+            if last_batch > first_batch
+            else set()
+        )
+
+        def _restore_broadcast(table, date, batch_number):
+            """Put back the frame this table carried on this date during the first
+            batch. A date with no snapshot is one the frame did not change on, so
+            whatever _result still holds (restored on an earlier date, since both
+            loops walk the dates in the same order) is already the right frame."""
+            if batch_number == first_batch or table["table_name"] not in _replayed:
+                return
+            _snapshot = _broadcast.get((table["table_name"], str(date)))
+            if _snapshot is not None:
+                _result[table["table_name"]] = _snapshot
+
+        def _snapshot_broadcast(table, date, batch_number):
+            if batch_number != first_batch or table["table_name"] not in _replayed:
+                return
+            _name = table["table_name"]
+            _frame = _result[_name]
+            if _broadcast.get((_name, "")) is _frame:
+                return  # same object as the previous date — one entry covers both
+            _broadcast[(_name, str(date))] = _frame
+            _broadcast[(_name, "")] = _frame
+
         # structured progress journal (JSON lines, START/DONE/ERROR per unit)
         _params = self._data_generator_config_file_obj["default_parameters"]
         _log_path = _params.get(
@@ -1345,6 +1403,7 @@ class Generator:
             )
             for table in self._data_generator_config_file_obj["tables"]:
                 self._journal.start(table["table_name"], _start_date, _batch_number)
+                _restore_broadcast(table, _start_date, _batch_number)
                 # resolve the per-batch row count BEFORE any checkpoint skip, so a
                 # restored table still has _number_of_rows_per_batch for later dates.
                 self._resolve_row_count(table, _result, number_of_batches)
@@ -1360,6 +1419,7 @@ class Generator:
                 )
                 if _ckpt_df is not None:
                     _result[table["table_name"]] = _ckpt_df
+                    _snapshot_broadcast(table, _start_date, _batch_number)
                     self._journal.done(
                         table["table_name"], _start_date, _batch_number, _safe_len(_ckpt_df)
                     )
@@ -1439,6 +1499,7 @@ class Generator:
                             date_position=f"1/{len(list_of_dates) + 1}",
                         )
 
+                _snapshot_broadcast(table, _start_date, _batch_number)
                 self._journal.done(
                     table["table_name"],
                     _start_date,
@@ -1457,6 +1518,7 @@ class Generator:
                 )
                 for table in self._data_generator_config_file_obj["tables"]:
                     self._journal.start(table["table_name"], _date, _batch_number)
+                    _restore_broadcast(table, _date, _batch_number)
                     _eff_batch = self._effective_batch(table, first_batch, _batch_number)
                     _ckpt_df = self._load_checkpoint(
                         self._checkpoint_path(table, _date, _eff_batch),
@@ -1468,6 +1530,7 @@ class Generator:
                     )
                     if _ckpt_df is not None:
                         _result[table["table_name"]] = _ckpt_df
+                        _snapshot_broadcast(table, _date, _batch_number)
                         self._journal.done(
                             table["table_name"], _date, _batch_number, _safe_len(_ckpt_df)
                         )
@@ -1562,6 +1625,7 @@ class Generator:
                                 date_position=f"{_date_idx + 2}/{len(list_of_dates) + 1}",
                             )
 
+                    _snapshot_broadcast(table, _date, _batch_number)
                     self._journal.done(
                         table["table_name"],
                         _date,
