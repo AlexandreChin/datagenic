@@ -316,13 +316,13 @@ class DateStampingPostProcessor:
 class DateEchoPostProcessor:
     """Records the date carried by the broadcast table it was fed."""
 
-    def call(self, _input_tables=None, _date=None, _batch_number=None, **kwargs):
+    def call(self, _input_tables=None, _date=None, _batch_number=None, column="d", **kwargs):
         dim = _as_pl(next(iter((_input_tables or {}).values())))
         return pl.DataFrame(
             {
                 "batch": [_batch_number],
                 "date": [str(_date)],
-                "seen": [dim["d"][0]],
+                "seen": [str(dim[column][0])],
             }
         )
 

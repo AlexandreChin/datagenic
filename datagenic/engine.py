@@ -1536,7 +1536,12 @@ class Generator:
                         )
                         continue
                     if "columns" in table and table["columns"]:
-                        if _batch_number == first_batch or not table["single_batch"]:
+                        # single_date means "generated on start_date, reused after",
+                        # so its columns must not be advanced per date either — the
+                        # postprocessor and the dump below already skip such a table.
+                        if not table["single_date"] and (
+                            _batch_number == first_batch or not table["single_batch"]
+                        ):
                             _result[table["table_name"]] = self._recall_columns(
                                 table,
                                 _result[table["table_name"]],
