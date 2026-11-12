@@ -890,7 +890,10 @@ class Generator:
                     # keys fill the remaining budget instead of this column being
                     # over-allocated distinct values it can never deliver.
                     declared_cardinality = column["generator_obj"].cardinality(
-                        **column["column_generator"]["args"]
+                        **column["column_generator"]["args"],
+                        _date=date,
+                        _start_date=start_date,
+                        _end_date=end_date,
                     )
                     column["column_generator"]["args"]["cardinality"] = declared_cardinality
                     remaining_cardinality_budget = max(
