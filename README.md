@@ -5,12 +5,12 @@
 
 Generating data _right_ is hard in four ways at once. datagenic is built around solving all four:
 
-| The challenge                                                                                                   | How datagenic answers it                                                                             |
-| --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| **Realistic data** — real data follows rules (derived, conditional, correlated); fakers only emit canned values | One click scaffolds **quite-realistic** data — then **fine-tune for full realism** (Claude can help) |
-| **Multi-dimensional consistency** — must hold _within a table_, _across tables_, and _over time_, all at once   | Unique **within a table**, valid **across tables**, coherent **over time** — from one seed           |
-| **Agile logic** — you must iterate without breaking consistency or what already worked                          | Iterate freely; built-in checks **guarantee you didn't break** earlier results                       |
-| **Scale** — a few rows for a test, or billions for a perf run — usually two different tools                     | **One flag** — 100 rows to a billion, one core to a cluster, **identical at every size**             |
+| The challenge                                                                                                   | How datagenic answers it                                                                       |
+| --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| **Realistic data** — real data follows rules (derived, conditional, correlated); fakers only emit canned values | One click scaffolds **Realistic** data — then **fine-tune for full realism** (Claude can help) |
+| **Multi-dimensional consistency** — must hold _within a table_, _across tables_, and _over time_, all at once   | Unique **within a table**, valid **across tables**, coherent **over time** — from one seed     |
+| **Agile logic** — you must iterate without breaking consistency or what already worked                          | Iterate freely; built-in checks **guarantee you didn't break** earlier results                 |
+| **Scale** — a few rows for a test, or billions for a perf run — usually two different tools                     | **One flag** — 100 rows to a billion, one core to a cluster, **identical at every size**       |
 
 `import datagenic` pulls in no cloud SDK; backends load only when you use them.
 
